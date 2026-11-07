@@ -134,6 +134,39 @@ pub fn package(library: &[u8], metadata: &Metadata) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// DuckDB hashes an extension in chunks of this size for its signature.
+pub const SIGNING_CHUNK: usize = 1 << 20;
+
+/// The digest DuckDB checks an extension's signature against
+/// (`ExtensionHelper::CheckExtensionSignature`): the file without its 256-byte signature, cut in
+/// chunks of 1 MiB, the SHA-256 of each chunk, and the SHA-256 of their concatenation. The
+/// signature is an RSA PKCS#1 v1.5 signature of this digest as a SHA-256 digest, as
+/// `openssl pkeyutl -sign -pkeyopt digest:sha256 -in DIGEST` makes it.
+pub fn signing_hash(file: &[u8]) -> Result<[u8; 32], String> {
+    use sha2::{Digest, Sha256};
+    let content = file.len().checked_sub(SIGNATURE_LEN).filter(|_| Metadata::parse(file).is_some());
+    let Some(end) = content else { return Err("not a packaged extension: no metadata footer".into()) };
+    let mut chunks = Sha256::new();
+    for chunk in file[..end].chunks(SIGNING_CHUNK) {
+        chunks.update(Sha256::digest(chunk));
+    }
+    Ok(chunks.finalize().into())
+}
+
+/// The packaged extension `file` with `signature` (256 bytes) in place of its signature.
+pub fn with_signature(file: &[u8], signature: &[u8]) -> Result<Vec<u8>, String> {
+    if signature.len() != SIGNATURE_LEN {
+        return Err(format!("a signature is {SIGNATURE_LEN} bytes (RSA 2048), not {}", signature.len()));
+    }
+    if Metadata::parse(file).is_none() {
+        return Err("not a packaged extension: no metadata footer".into());
+    }
+    let mut out = file.to_vec();
+    let start = out.len() - SIGNATURE_LEN;
+    out[start..].copy_from_slice(signature);
+    Ok(out)
+}
+
 /// The DuckDB platform name of the target this crate is compiled for.
 pub fn current_platform() -> Option<&'static str> {
     platform_of(std::env::consts::OS, std::env::consts::ARCH)
@@ -256,5 +289,41 @@ mod tests {
         let mut bad = m;
         bad.platform = "x".repeat(40);
         assert!(package(&lib, &bad).is_err());
+    }
+
+    #[test]
+    fn the_signing_hash_is_duckdbs_two_level_hash() {
+        use sha2::{Digest, Sha256};
+        let small = package(b"library bytes", &meta()).unwrap();
+        let content = &small[..small.len() - SIGNATURE_LEN];
+        let expected: [u8; 32] = Sha256::digest(Sha256::digest(content)).into();
+        assert_eq!(signing_hash(&small).unwrap(), expected);
+        // more than one chunk: the hash of the chunks' hashes, the last chunk short
+        let library: Vec<u8> = (0..SIGNING_CHUNK * 2 + 10).map(|i| (i % 251) as u8).collect();
+        let big = package(&library, &meta()).unwrap();
+        let content = &big[..big.len() - SIGNATURE_LEN];
+        let mut h = Sha256::new();
+        h.update(Sha256::digest(&content[..SIGNING_CHUNK]));
+        h.update(Sha256::digest(&content[SIGNING_CHUNK..2 * SIGNING_CHUNK]));
+        h.update(Sha256::digest(&content[2 * SIGNING_CHUNK..]));
+        let expected: [u8; 32] = h.finalize().into();
+        assert_eq!(signing_hash(&big).unwrap(), expected);
+        // the signature itself is not hashed
+        let signed = with_signature(&big, &[7u8; SIGNATURE_LEN]).unwrap();
+        assert_eq!(signing_hash(&signed).unwrap(), expected);
+        assert!(signing_hash(b"short").is_err());
+        assert!(signing_hash(&library).is_err());
+    }
+
+    #[test]
+    fn a_signature_replaces_the_empty_one() {
+        let file = package(b"library", &meta()).unwrap();
+        let signed = with_signature(&file, &[0xabu8; SIGNATURE_LEN]).unwrap();
+        assert_eq!(signed.len(), file.len());
+        assert_eq!(&signed[..file.len() - SIGNATURE_LEN], &file[..file.len() - SIGNATURE_LEN]);
+        assert!(signed[file.len() - SIGNATURE_LEN..].iter().all(|&b| b == 0xab));
+        assert_eq!(Metadata::parse(&signed), Metadata::parse(&file));
+        assert!(with_signature(&file, &[0u8; 255]).unwrap_err().contains("not 255"));
+        assert!(with_signature(b"no footer here", &[0u8; SIGNATURE_LEN]).is_err());
     }
 }

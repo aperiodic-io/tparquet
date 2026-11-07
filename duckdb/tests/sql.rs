@@ -1,6 +1,6 @@
 //! Runs the SQL tests (`tests/*.py`, pytest on Python `duckdb` 2.0.0) against the extension this
-//! very build produced, so that `cargo test` (and every `cargo mutants` mutant) checks the code
-//! DuckDB actually loads.
+//! very build produced, packaged as both builds (C API v1 and C API v2), so that `cargo test`
+//! (and every `cargo mutants` mutant) checks the code DuckDB actually loads.
 //!
 //! The Python environment is `duckdb/.venv` (`uv sync` in `duckdb/`), or the interpreter in
 //! `$TPARQUET_DUCKDB_PYTHON`; `$TPARQUET_DUCKDB_PYTEST_MARK` selects tests by marker (the mutation
@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tparquet_duckdb::metadata::{Metadata, current_platform, package};
+use tparquet_duckdb::metadata::{Api, Metadata, current_platform, package};
 
 /// The extension library cargo built for this test binary (`target/<profile>/deps/`).
 fn library() -> PathBuf {
@@ -55,20 +55,21 @@ fn cli(manifest: &Path) -> PathBuf {
     profile_dir.join(format!("tparquet{}", std::env::consts::EXE_SUFFIX))
 }
 
-#[test]
-fn sql_tests() {
+fn sql_tests(api: Api, name: &str) {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = tempfile::tempdir().unwrap();
     let extension = dir.path().join("tparquet.duckdb_extension");
     let bytes = std::fs::read(library()).unwrap();
     let platform = current_platform().expect("a platform DuckDB names");
-    std::fs::write(&extension, package(&bytes, &Metadata::for_platform(platform)).unwrap()).unwrap();
+    std::fs::write(&extension, package(&bytes, &Metadata::for_api(platform, api)).unwrap()).unwrap();
 
     let mut cmd = Command::new(python(manifest));
     cmd.current_dir(manifest)
         .args(["-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", "tests"])
+        .env("TPARQUET_DUCKDB_API", name)
         .env("TPARQUET_DUCKDB_EXTENSION", &extension)
         .env("TPARQUET_DUCKDB_SCRATCH", dir.path())
+        .env("TPARQUET_DUCKDB_PACKAGER", env!("CARGO_BIN_EXE_package-extension"))
         .env("TPARQUET_CLI", cli(manifest));
     if let Ok(mark) = std::env::var("TPARQUET_DUCKDB_PYTEST_MARK") {
         cmd.args(["-m", &mark]);
@@ -76,6 +77,16 @@ fn sql_tests() {
     let out = cmd.output().expect("run pytest");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "SQL tests failed\n{stdout}\n{stderr}");
+    assert!(out.status.success(), "SQL tests of the {name} build failed\n{stdout}\n{stderr}");
     println!("{stdout}");
+}
+
+#[test]
+fn sql_tests_of_the_c_api_v1_build() {
+    sql_tests(Api::V1, "v1");
+}
+
+#[test]
+fn sql_tests_of_the_c_api_v2_build() {
+    sql_tests(Api::V2, "v2");
 }

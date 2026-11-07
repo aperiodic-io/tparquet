@@ -30,6 +30,8 @@ arrow-cast.workspace = true
 arrow-select.workspace = true
 glob = "0.3"
 bytes = "1"
+# the SHA-256 of DuckDB's extension signature scheme (src/metadata.rs signing_hash)
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
