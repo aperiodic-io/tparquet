@@ -82,6 +82,18 @@ and `tparquet verify` confirms it holds the same values.
 
 The codec is specified in [`spec/FORMAT.md`](spec/FORMAT.md), so anyone can implement it.
 
+## Where it fits: a storage tier
+
+Until PCODEC is a standard Parquet codec, use tparquet where you control every reader, and
+write standard Parquet wherever data leaves: keep the history, the archive or your own copy
+of vendor data in tparquet, and `tparquet decode` (or `transcode`) at the edge for customers,
+other teams, managed warehouses and BI tools. [`docs/STORAGE-TIER.md`](docs/STORAGE-TIER.md)
+has the recipes, and the cases where it does not pay.
+
+Making PCODEC a standard codec, so that any Parquet reader can open these files, is the
+proposal in [`spec/UPSTREAM.md`](spec/UPSTREAM.md): what would change in `parquet.thrift`,
+the evidence, and the work still needed before it goes to the Apache Parquet community.
+
 ## Install
 
 The packages are not on PyPI or crates.io yet. Build them from a checkout of this repository
