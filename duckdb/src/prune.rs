@@ -28,19 +28,6 @@ pub enum Op {
     Ge,
 }
 
-impl Op {
-    /// The operator with its operands swapped: `c < x` is `x > c`.
-    pub fn flip(self) -> Self {
-        match self {
-            Op::Lt => Op::Gt,
-            Op::Le => Op::Ge,
-            Op::Gt => Op::Lt,
-            Op::Ge => Op::Le,
-            op => op,
-        }
-    }
-}
-
 /// A value of a column, as statistics and constants hold it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {
@@ -405,12 +392,6 @@ mod tests {
         let mut cols = vec![];
         Predicate::Or(vec![no, Predicate::And(vec![yes, Predicate::IsNull(3)])]).columns(&mut cols);
         assert_eq!(cols, vec![0, 1, 3]);
-        assert_eq!(Op::Lt.flip(), Op::Gt);
-        assert_eq!(Op::Ge.flip(), Op::Le);
-        assert_eq!(Op::Eq.flip(), Op::Eq);
-        assert_eq!(Op::Ne.flip(), Op::Ne);
-        assert_eq!(Op::Le.flip(), Op::Ge);
-        assert_eq!(Op::Gt.flip(), Op::Lt);
     }
 
     #[test]

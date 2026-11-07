@@ -108,8 +108,10 @@ def test_globs_over_a_remote_file_system(mcon):
 
 
 def test_a_missing_remote_file_is_named(mcon):
-    with pytest.raises(duckdb.Error, match="memory://data/missing.parquet"):
-        rows(mcon, "SELECT * FROM read_tparquet('memory://data/missing.parquet')")
+    # with the file system's own error, as DuckDB reports it
+    for function in ["read_tparquet", "tparquet_metadata"]:
+        with pytest.raises(duckdb.Error, match=r"(?s)cannot open memory://data/missing.parquet: .*FileNotFoundError"):
+            rows(mcon, f"SELECT * FROM {function}('memory://data/missing.parquet')")
 
 
 def test_a_damaged_remote_file_is_named(mcon, memfs):

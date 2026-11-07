@@ -174,16 +174,6 @@ impl Type {
             _ => SqlType::Unsupported(self.name()?),
         })
     }
-
-    /// The type as DuckDB writes it (`DECIMAL(18,3)`, `STRUCT(a INTEGER)`...).
-    pub fn text(&self) -> Result<String, String> {
-        let mut len = 0u64;
-        call!(duckdb_v2_logical_type_to_text(self.0, std::ptr::null_mut(), 0, &mut len))?;
-        let mut buf = vec![0u8; len as usize + 1];
-        call!(duckdb_v2_logical_type_to_text(self.0, buf.as_mut_ptr().cast(), buf.len() as u64, &mut len))?;
-        buf.truncate(len as usize);
-        Ok(String::from_utf8_lossy(&buf).into_owned())
-    }
 }
 
 /// The [`SqlType`] of a type id that takes no parameters, if the extension models it.
@@ -281,15 +271,6 @@ impl Value {
         Ok(String::from_utf8_lossy(&buf).into_owned())
     }
 
-    pub fn blob(&self) -> Result<Vec<u8>, String> {
-        let mut v = s::duckdb_v2_str { ptr: std::ptr::null(), len: 0 };
-        call!(duckdb_v2_value_get_blob(self.0, &mut v))?;
-        if v.len == 0 {
-            return Ok(vec![]);
-        }
-        Ok(unsafe { std::slice::from_raw_parts(v.ptr.cast::<u8>(), v.len as usize) }.to_vec())
-    }
-
     pub fn children(&self) -> Result<Vec<Value>, String> {
         let mut n = 0u64;
         call!(duckdb_v2_value_get_child_count(self.0, &mut n))?;
@@ -310,7 +291,6 @@ impl Value {
         }
         let t = self.logical_type()?;
         Ok(match t.id()? {
-            Id::DUCKDB_V2_LOGICAL_TYPE_ID_SQLNULL => Val::Null,
             Id::DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN => {
                 let mut b = false;
                 call!(duckdb_v2_value_get_bool(self.0, &mut b))?;

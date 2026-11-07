@@ -179,7 +179,7 @@ pub fn predicate(e: s::duckdb_v2_expression_handle, columns: &Columns) -> Option
             let [a, b] = cs.as_slice() else { return None };
             let (column, value, op) = match (columns.column(*a), columns.column(*b)) {
                 (Some(c), None) if constant(*b) => (c, scalar(*b, &columns.types[c])?, op),
-                (None, Some(c)) if constant(*a) => (c, scalar(*a, &columns.types[c])?, op.flip()),
+                // DuckDB puts the column first (`5 > x` arrives as `x < 5`)
                 _ => return None,
             };
             Some(Predicate::Compare { column, op, value })

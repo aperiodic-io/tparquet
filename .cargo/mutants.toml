@@ -26,6 +26,14 @@ exclude_re = [
     # destroying them leaks a few bytes and changes nothing a query can observe (equivalent
     # mutants).
     'duckdb/src/vfs1\.rs:.*<impl Drop for (DuckFs|Options)>::drop',
+    # The same for the C API v2 handles of values, logical types, Arrow importers and table
+    # functions (destroying none, or only null handles, leaks; equivalent mutants).
+    'duckdb/src/v2/(sys|read)\.rs:.*<impl Drop for (Value|Type|Importer|Function)>::drop',
+    # Value::val reads VARCHAR values with duckdb_v2_value_get_varchar; without that arm they
+    # fall to duckdb_v2_value_to_string, which renders a VARCHAR as its own text, so the result
+    # is the same. The arm stays because the header calls to_string diagnostic only
+    # (equivalent mutant).
+    'duckdb/src/v2/sys\.rs:.*delete match arm Id::DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR in Value::val',
     # duckdb_file_system_open sets the file handle exactly when it succeeds, so "failed or no
     # handle" and "failed and no handle" are the same condition; the handle check only guards
     # against a DuckDB that broke that contract (equivalent mutant).
