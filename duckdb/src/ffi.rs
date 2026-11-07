@@ -41,6 +41,20 @@ pub unsafe fn take_string(p: *mut c_char) -> String {
     s
 }
 
+/// The message of an error DuckDB reported, and frees it.
+///
+/// # Safety
+/// `e` is null or error data from DuckDB, owned by the caller.
+pub unsafe fn take_error(mut e: ffi::duckdb_error_data) -> String {
+    if e.is_null() {
+        return "unknown error".into();
+    }
+    let p = unsafe { ffi::duckdb_error_data_message(e) };
+    let message = if p.is_null() { String::new() } else { unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned() };
+    unsafe { ffi::duckdb_destroy_error_data(&mut e) };
+    if message.is_empty() { "unknown error".into() } else { message }
+}
+
 /// The DuckDB logical type of a [`SqlType`].
 pub fn logical_type(t: &SqlType) -> Result<OwnedType, String> {
     use ffi::*;

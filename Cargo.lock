@@ -3516,6 +3516,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "arrow-select",
+ "bytes",
  "duckdb",
  "glob",
  "half",

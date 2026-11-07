@@ -10,10 +10,12 @@
 pub mod chunk;
 pub mod copy;
 pub mod ffi;
+pub mod fs;
 pub mod metadata;
 pub mod read;
 pub mod scan;
 pub mod types;
+pub mod vfs1;
 pub mod write;
 
 use duckdb::ffi as sys;

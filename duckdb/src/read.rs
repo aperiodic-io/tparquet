@@ -61,7 +61,8 @@ unsafe fn bind_impl(info: ffi::duckdb_bind_info) -> Result<(), String> {
         file_row_number: flag(info, scan::FILE_ROW_NUMBER)?,
         union_by_name: flag(info, "union_by_name")?,
     };
-    let bound = Bound::bind(scan::expand(&patterns)?, options)?;
+    let fs: Arc<dyn crate::fs::FileSystem> = Arc::new(unsafe { crate::vfs1::DuckFs::of_bind(info) }?);
+    let bound = Bound::bind(fs.clone(), scan::expand(&patterns, fs.as_ref())?, options)?;
     let expected = unsafe { ffi::duckdb_table_function_bind_get_result_column_count(info) };
     if expected > 0 {
         // COPY ... FROM: DuckDB has set the target table's columns
@@ -181,7 +182,7 @@ fn write_batch(batch: &ScanBatch, slots: &[Slot], output: ffi::duckdb_data_chunk
             Slot::File { projected, .. } => {
                 // values DuckDB refuses (a decimal wider than its precision, in a damaged file)
                 // are an error of the file
-                let of_file = |e: String| format!("cannot read {}: {e}", batch.file.path.display());
+                let of_file = |e: String| format!("cannot read {}: {e}", batch.file.path);
                 let column = &batch.columns[*projected];
                 write_arrow_array_to_vector(column, &mut vector).map_err(|e| of_file(e.to_string()))?;
                 unsafe { write_intervals(column.as_ref(), vector) }.map_err(of_file)?;
@@ -189,7 +190,7 @@ fn write_batch(batch: &ScanBatch, slots: &[Slot], output: ffi::duckdb_data_chunk
             Slot::Filename => {
                 let flat = vector.flat_vector();
                 for row in 0..batch.num_rows {
-                    flat.insert(row, batch.file.name.as_str());
+                    flat.insert(row, batch.file.path.as_str());
                 }
             }
             Slot::FileRowNumber => {

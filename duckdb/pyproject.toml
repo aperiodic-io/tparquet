@@ -5,6 +5,7 @@ description = "SQL and end-to-end tests of the tparquet DuckDB extension"
 requires-python = ">=3.14"
 dependencies = [
     "duckdb==2.0.0",
+    "fsspec==2025.10.0",
     "hypothesis==6.168.5",
     "pyarrow==23.0.0",
     "pytest==9.0.2",
