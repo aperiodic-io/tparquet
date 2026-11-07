@@ -240,20 +240,19 @@ def test_columns_and_types(name: str) -> None:
 
 
 def test_an_unknown_measurement() -> None:
-    with pytest.raises(ValueError, match="unknown measurement 'cpu-only'"):
+    with pytest.raises(ValueError, match=r"^unknown measurement 'cpu-only'$"):
         tsbs.generate("cpu-only", hosts=1, ticks=1)
 
 
 def test_an_unknown_order() -> None:
-    with pytest.raises(ValueError, match="unknown order 'random'"):
+    with pytest.raises(ValueError, match=re.escape("unknown order 'random': one of time, series")):
         tsbs.generate("cpu", hosts=1, ticks=1, order="random")
 
 
 def test_nothing_to_generate() -> None:
-    with pytest.raises(ValueError, match="hosts and ticks"):
-        tsbs.generate("cpu", hosts=0, ticks=1)
-    with pytest.raises(ValueError, match="hosts and ticks"):
-        tsbs.generate("cpu", hosts=1, ticks=0)
+    for hosts, ticks in ((0, 1), (1, 0)):
+        with pytest.raises(ValueError, match=r"^hosts and ticks must be at least 1$"):
+            tsbs.generate("cpu", hosts=hosts, ticks=ticks)
 
 
 def test_time_order_is_a_tick_of_every_host_at_a_time() -> None:
@@ -577,6 +576,198 @@ def test_redis_tags_uptime_and_fields() -> None:
             assert series[-1] == after(1, ticks)
 
 
+# --- the parameters, exactly: a random number generator whose draws are the extremes
+
+
+class Extreme(random.Random):
+    """Draws that make the parameters of the generator observable: `randrange` and `choice` give
+    the last value (or the first), `random` the middle, and a step of `gauss` is the mean plus
+    `sigmas` standard deviations: 1 for a step of a known size, a huge number to run into the
+    bounds of a clamped walk."""
+
+    def __init__(self, *, last: bool = False, sigmas: float = 1.0) -> None:
+        super().__init__(0)
+        self.last = last
+        self.sigmas = sigmas
+
+    def random(self) -> float:
+        return 0.5
+
+    def randrange(self, start: int, stop: int | None = None, step: int = 1) -> int:
+        assert stop is None, "the generator draws below one bound"
+        return start - 1 if self.last else 0
+
+    def choice(self, seq: Any) -> Any:
+        return seq[-1] if self.last else seq[0]
+
+    def gauss(self, mu: float = 0.0, sigma: float = 1.0) -> float:
+        return mu + self.sigmas * sigma
+
+
+def test_the_last_draws_of_a_host_and_of_each_measurement() -> None:
+    last = Extreme(last=True)
+    assert tsbs.host_tags(last, 7) == {
+        "hostname": "host_7",
+        "region": "sa-east-1",
+        "datacenter": "sa-east-1c",
+        "rack": "99",
+        "os": "Ubuntu15.10",
+        "arch": "x86",
+        "team": "CHI",
+        "service": "19",
+        "service_version": "1",
+        "service_environment": "test",
+    }
+    tags = {m: tsbs.MEASUREMENTS[m](Extreme(last=True), 2) for m in COLUMNS}
+    assert tags["diskio"][0] == {"serial": "999-999-999"}
+    assert tags["disk"][0] == {"path": "/dev/sda9", "fstype": "btrfs"}
+    assert tags["net"][0] == {"interface": "eth3"}
+    assert tags["nginx"][0] == {"port": "21023", "server": "nginx_99999"}
+    assert tags["redis"][0] == {"port": "21023", "server": "redis_99999"}
+    assert tags["kernel"][1]["boot_time"] == [239, 239]
+    # the measurements without tags of their own
+    assert all(tags[m][0] == {} for m in ("cpu", "kernel", "mem", "postgresl"))
+    assert tags["mem"][1]["total"] == [16 << 30] * 2
+
+
+def test_the_first_draws_of_a_host_and_of_each_measurement() -> None:
+    assert tsbs.host_tags(Extreme(), 0) == {
+        "hostname": "host_0",
+        "region": "us-east-1",
+        "datacenter": "us-east-1a",
+        "rack": "0",
+        "os": "Ubuntu16.10",
+        "arch": "x64",
+        "team": "SF",
+        "service": "0",
+        "service_version": "0",
+        "service_environment": "production",
+    }
+    tags = {m: tsbs.MEASUREMENTS[m](Extreme(), 2) for m in ("diskio", "disk", "net", "nginx", "redis")}
+    assert tags["diskio"][0] == {"serial": "000-000-000"}
+    assert tags["disk"][0] == {"path": "/dev/sda0", "fstype": "ext3"}
+    assert tags["net"][0] == {"interface": "eth0"}
+    assert tags["nginx"][0] == {"port": "1024", "server": "nginx_0"}
+    assert tags["redis"][0] == {"port": "1024", "server": "redis_0"}
+    assert tsbs.MEASUREMENTS["kernel"](Extreme(), 2)[1]["boot_time"] == [0, 0]
+    assert tsbs.MEASUREMENTS["mem"](Extreme(), 2)[1]["total"] == [8 << 30] * 2
+
+
+GB16 = 16 << 30
+# (field, mean, std, lo, hi, start) of every walk of the Go generator; counters (monotonic) have
+# no bounds. Names of fields that are not walks (derived from one, or constant) are left out.
+Spec = tuple[str, float, float, "float | None", "float | None", float]
+WALKS: dict[str, list[Spec]] = {
+    "cpu": [(f, 0, 1, 0, 100, 50) for f in COLUMNS["cpu"][1]],
+    "diskio": [
+        ("reads", 50, 1, None, None, 0),
+        ("writes", 50, 1, None, None, 0),
+        ("read_bytes", 100, 1, None, None, 0),
+        ("write_bytes", 100, 1, None, None, 0),
+        ("read_time", 5, 1, None, None, 0),
+        ("write_time", 5, 1, None, None, 0),
+        ("io_time", 5, 1, None, None, 0),
+    ],
+    "disk": [("free", 50, 1, 0, 1 << 40, 1 << 39)],
+    "kernel": [(f, 5, 1, None, None, 0) for f in COLUMNS["kernel"][1][1:]],
+    # the 8 GiB host: used, cached and buffered walk by total / 64, from half of the total
+    "mem": [(f, 0, (8 << 30) / 64, 0, 8 << 30, 4 << 30) for f in ("used", "cached", "buffered")],
+    "net": [(f, 50 if i < 4 else 5, 1, None, None, 0) for i, f in enumerate(COLUMNS["net"][1])],
+    "nginx": [
+        ("accepts", 5, 1, None, None, 0),
+        ("active", 5, 1, 0, 100, 0),
+        ("handled", 5, 1, None, None, 0),
+        ("reading", 5, 1, 0, 100, 0),
+        ("requests", 5, 1, None, None, 0),
+        ("waiting", 5, 1, 0, 100, 0),
+        ("writing", 5, 1, 0, 100, 0),
+    ],
+    "postgresl": [
+        (f, 1024 if f == "temp_bytes" else 5, 1, 0, 1 << 30 if f == "temp_bytes" else 1000, 0)
+        for f in COLUMNS["postgresl"][1]
+    ],
+    "redis": [
+        ("total_connections_received", 5, 1, None, None, 0),
+        *((f, 50, 1, None, None, 0) for f in ("expired_keys", "evicted_keys", "keyspace_hits", "keyspace_misses")),
+        ("connected_clients", 50, 1, 0, 10000, 0),
+        *(
+            (f, 50, 1, 0, GB16, GB16 // 2)
+            for f in ("used_memory", "used_memory_rss", "used_memory_peak", "used_memory_lua")
+        ),
+        ("rdb_changes_since_last_save", 50, 1, 0, 10000, 0),
+        *(
+            (f, 5, 1, 0, 1000, 0)
+            for f in (
+                "sync_full",
+                "sync_partial_ok",
+                "sync_partial_err",
+                "pubsub_channels",
+                "pubsub_patterns",
+                "latest_fork_usec",
+                "connected_slaves",
+                "master_repl_offset",
+                "repl_backlog_active",
+                "repl_backlog_size",
+                "repl_backlog_histlen",
+                "used_cpu_sys",
+                "used_cpu_user",
+                "used_cpu_sys_children",
+                "used_cpu_user_children",
+            )
+        ),
+        ("mem_fragmentation_ratio", 5, 1, 0, 100, 0),
+    ],
+}
+# walks with no bounds that are not counters either: N(1, 1) steps from zero
+FREE = ("instantaneous_ops_per_sec", "instantaneous_input_kbps", "instantaneous_output_kbps")
+HUGE = 1e15
+CASES = [(m, spec) for m, specs in WALKS.items() for spec in specs]
+
+
+def fields_of(measurement: str, rng: random.Random, ticks: int = 4) -> dict[str, Any]:
+    return tsbs.MEASUREMENTS[measurement](rng, ticks)[1]
+
+
+def test_every_walk_of_the_generator_is_in_the_table() -> None:
+    # the table is of the walks: the other fields are derived or constant
+    walks = {(m, f) for m, f, *_ in ((m, *spec) for m, spec in CASES)}
+    derived = {("disk", f) for f in ("total", "used", "used_percent", "inodes_total", "inodes_free", "inodes_used")} | {
+        ("kernel", "boot_time"),
+        ("redis", "uptime_in_seconds"),
+    }
+    derived |= {("mem", f) for f in COLUMNS["mem"][1] if f not in ("used", "cached", "buffered")}
+    derived |= {("redis", f) for f in FREE}
+    every = {(m, f) for m, (_, fields) in COLUMNS.items() for f in fields}
+    assert walks | derived == every
+    assert walks.isdisjoint(derived)
+
+
+@pytest.mark.parametrize(("measurement", "spec"), CASES, ids=[f"{m}.{s[0]}" for m, s in CASES])
+def test_a_step_is_normal_around_the_mean_of_the_field(measurement: str, spec: Spec) -> None:
+    field, mean, std, _, _, start = spec
+    # steps of the mean plus one deviation, from the start (truncated to integers)
+    series = fields_of(measurement, Extreme(sigmas=1.0))[field]
+    assert series == [int(start + k * (mean + std)) for k in range(4)]
+
+
+@pytest.mark.parametrize(("measurement", "spec"), CASES, ids=[f"{m}.{s[0]}" for m, s in CASES])
+def test_a_clamped_walk_runs_into_its_bounds_and_a_counter_never_goes_back(measurement: str, spec: Spec) -> None:
+    field, _, _, lo, hi, start = spec
+    up = fields_of(measurement, Extreme(sigmas=HUGE))[field]
+    down = fields_of(measurement, Extreme(sigmas=-HUGE))[field]
+    assert up[0] == down[0] == int(start)
+    if lo is None:
+        assert hi is None
+        # a counter adds the size of the step: huge, and never back
+        assert all(a < b for a, b in pairwise(up))
+        assert all(a < b for a, b in pairwise(down))
+        assert min(down) >= 0
+    else:
+        assert hi is not None
+        assert up[1:] == [int(hi)] * 3
+        assert down[1:] == [int(lo)] * 3
+
+
 # --- the file in the cache
 
 
@@ -623,3 +814,13 @@ def test_ensure_generates_once(tmp_path: pathlib.Path, monkeypatch: pytest.Monke
     assert pq.read_table(path).num_rows == 6
     assert fetch.ensure(s, tmp_path) == path
     assert calls == ["cpu"]
+
+
+@pytest.mark.parametrize("field", FREE)
+def test_a_free_walk_follows_its_steps_without_bounds_or_a_floor_at_zero(field: str) -> None:
+    assert fields_of("redis", Extreme(sigmas=1.0))[field] == [0, 2, 4, 6]
+    up = fields_of("redis", Extreme(sigmas=HUGE))[field]
+    down = fields_of("redis", Extreme(sigmas=-HUGE))[field]
+    assert up == [0, *(int(k * (HUGE + 1)) for k in (1, 2, 3))]
+    # not a counter: it goes down
+    assert down == [0, *(int(k * (1 - HUGE)) for k in (1, 2, 3))]

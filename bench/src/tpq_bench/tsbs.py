@@ -300,7 +300,7 @@ MEASUREMENTS: dict[str, Maker] = {
 }
 
 
-def _host_tags(rng: random.Random, host: int) -> dict[str, str]:
+def host_tags(rng: random.Random, host: int) -> dict[str, str]:
     region = rng.choice(list(REGIONS))
     return {
         "hostname": f"host_{host}",
@@ -338,12 +338,10 @@ def generate(
     if hosts < 1 or ticks < 1:
         raise ValueError("hosts and ticks must be at least 1")
     make = MEASUREMENTS[measurement]
-    times = pa.array([(START_S + INTERVAL_S * k) * 10**9 for k in range(ticks)], pa.int64()).cast(
-        pa.timestamp("ns", tz="UTC")
-    )
+    times = pa.array([(START_S + INTERVAL_S * k) * 10**9 for k in range(ticks)]).cast(pa.timestamp("ns", tz="UTC"))
     tables = []
     for host in range(hosts):
-        tags = _host_tags(random.Random(f"{seed}/host/{host}"), host)
+        tags = host_tags(random.Random(f"{seed}/host/{host}"), host)
         own, fields = make(random.Random(f"{seed}/{measurement}/{host}"), ticks)
         columns: dict[str, Any] = {"time": times}
         columns |= {name: pa.repeat(value, ticks) for name, value in (tags | own).items()}
@@ -352,7 +350,7 @@ def generate(
     table = pa.concat_tables(tables).combine_chunks()
     if order == "series":
         return table
-    return table.take(pa.array([h * ticks + t for t in range(ticks) for h in range(hosts)], pa.int64()))
+    return table.take(pa.array([h * ticks + t for t in range(ticks) for h in range(hosts)]))
 
 
 @dataclasses.dataclass(frozen=True)
