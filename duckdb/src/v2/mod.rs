@@ -12,6 +12,7 @@
 
 pub mod copy;
 pub mod filter;
+pub mod metadata;
 pub mod read;
 pub mod sys;
 
@@ -27,6 +28,7 @@ unsafe fn init(input: &s::duckdb_v2_extension_input) -> Result<bool, String> {
         return Ok(false);
     }
     read::register(input.extension, input.context)?;
+    metadata::register(input.extension, input.context)?;
     copy::register(input.extension, input.context)?;
     Ok(true)
 }

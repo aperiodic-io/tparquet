@@ -42,7 +42,8 @@ struct LocalState {
     batch: u64,
 }
 
-struct Importer(s::duckdb_v2_arrow_importer_handle);
+/// DuckDB's Arrow importer of one thread of a scan (created on its first batch).
+pub struct Importer(s::duckdb_v2_arrow_importer_handle);
 
 impl Drop for Importer {
     fn drop(&mut self) {
@@ -50,7 +51,7 @@ impl Drop for Importer {
     }
 }
 
-fn paths(v: Val) -> Result<Vec<String>, String> {
+pub fn paths(v: Val) -> Result<Vec<String>, String> {
     match v {
         Val::Str(s) => Ok(vec![s]),
         Val::List(items) => items
@@ -253,35 +254,48 @@ fn exec_impl(
     local.batch = batch.batch;
     let columns = arrays(&batch, &global.slots);
     if !columns.is_empty() {
-        let of_file = |e: String| format!("cannot read {}: {e}", batch.file.path);
-        let fields: Fields =
-            columns.iter().enumerate().map(|(i, c)| Field::new(format!("c{i}"), plain(c.data_type()), true)).collect();
-        let array = StructArray::try_new(fields.clone(), columns, None).map_err(|e| of_file(e.to_string()))?;
-        if local.importer.is_none() {
-            let schema =
-                arrow_schema::ffi::FFI_ArrowSchema::try_from(&DataType::Struct(fields)).map_err(|e| e.to_string())?;
-            let mut importer = Importer(std::ptr::null_mut());
-            let schema_ptr = &schema as *const _ as *mut libduckdb_sys::ArrowSchema;
-            call!(duckdb_v2_arrow_importer_create(context, schema_ptr, 0, &mut importer.0))?;
-            local.importer = Some(importer);
-        }
-        let importer = local.importer.as_ref().expect("created above").0;
-        let mut ffi_array = arrow_data::ffi::FFI_ArrowArray::new(&array.to_data());
-        let array_ptr = &mut ffi_array as *mut _ as *mut libduckdb_sys::ArrowArray;
-        // consumed: DuckDB takes the buffers over (zero-copy) and clears `release`
-        call!(duckdb_v2_arrow_importer_append(importer, array_ptr, true, true)).map_err(of_file)?;
-        let mut chunk: s::duckdb_v2_data_chunk_handle = std::ptr::null_mut();
-        call!(duckdb_v2_arrow_importer_next_chunk(importer, &mut chunk)).map_err(of_file)?;
-        let chunk = Chunk(chunk);
-        for i in 0..global.slots.len() as u64 {
-            let (mut target, mut source): (s::duckdb_v2_vector_handle, s::duckdb_v2_vector_handle) =
-                (std::ptr::null_mut(), std::ptr::null_mut());
-            call!(duckdb_v2_data_chunk_get_vector(output, i, &mut target))?;
-            call!(duckdb_v2_data_chunk_get_vector(chunk.0, i, &mut source))?;
-            call!(duckdb_v2_vector_reference(target, source)).map_err(of_file)?;
-        }
+        import(context, &mut local.importer, output, columns)
+            .map_err(|e| format!("cannot read {}: {e}", batch.file.path))?;
     }
     call!(duckdb_v2_vector_set_size(first, batch.num_rows as u64))
+}
+
+/// Moves `columns` (of equal length, one per vector of `output`) into `output` through DuckDB's
+/// Arrow importer, zero-copy; returns the row count. The vectors' sizes are not set.
+pub fn import(
+    context: s::duckdb_v2_context_handle,
+    importer: &mut Option<Importer>,
+    output: s::duckdb_v2_data_chunk_handle,
+    columns: Vec<ArrayRef>,
+) -> Result<usize, String> {
+    let rows = columns.first().map_or(0, |c| c.len());
+    let count = columns.len() as u64;
+    let fields: Fields =
+        columns.iter().enumerate().map(|(i, c)| Field::new(format!("c{i}"), plain(c.data_type()), true)).collect();
+    let array = StructArray::try_new(fields.clone(), columns, None).map_err(|e| e.to_string())?;
+    if importer.is_none() {
+        let schema =
+            arrow_schema::ffi::FFI_ArrowSchema::try_from(&DataType::Struct(fields)).map_err(|e| e.to_string())?;
+        let mut created = Importer(std::ptr::null_mut());
+        let schema_ptr = &schema as *const _ as *mut libduckdb_sys::ArrowSchema;
+        call!(duckdb_v2_arrow_importer_create(context, schema_ptr, 0, &mut created.0))?;
+        *importer = Some(created);
+    }
+    let handle = importer.as_ref().expect("created above").0;
+    let mut ffi_array = arrow_data::ffi::FFI_ArrowArray::new(&array.to_data());
+    let array_ptr = &mut ffi_array as *mut _ as *mut libduckdb_sys::ArrowArray;
+    // consumed: DuckDB takes the buffers over (zero-copy) and clears `release`
+    call!(duckdb_v2_arrow_importer_append(handle, array_ptr, true, true))?;
+    let mut chunk = Chunk(std::ptr::null_mut());
+    call!(duckdb_v2_arrow_importer_next_chunk(handle, &mut chunk.0))?;
+    for i in 0..count {
+        let (mut target, mut source): (s::duckdb_v2_vector_handle, s::duckdb_v2_vector_handle) =
+            (std::ptr::null_mut(), std::ptr::null_mut());
+        call!(duckdb_v2_data_chunk_get_vector(output, i, &mut target))?;
+        call!(duckdb_v2_data_chunk_get_vector(chunk.0, i, &mut source))?;
+        call!(duckdb_v2_vector_reference(target, source))?;
+    }
+    Ok(rows)
 }
 
 struct Chunk(s::duckdb_v2_data_chunk_handle);
@@ -315,7 +329,16 @@ unsafe extern "C" fn partition_data(
     });
 }
 
-struct Function(s::duckdb_v2_table_function_handle);
+/// A table function being registered (destroyed after registration).
+pub struct Function(pub s::duckdb_v2_table_function_handle);
+
+impl Function {
+    pub fn create(factory: s::duckdb_v2_factory_handle) -> Result<Self, String> {
+        let mut function = Function(std::ptr::null_mut());
+        call!(duckdb_v2_table_function_create(factory, &mut function.0))?;
+        Ok(function)
+    }
+}
 
 impl Drop for Function {
     fn drop(&mut self) {
@@ -328,8 +351,7 @@ pub fn register(extension: s::duckdb_v2_extension_handle, context: s::duckdb_v2_
     use s::DUCKDB_V2_FUNCTION_PARAMETER_KIND as Kind;
     use s::DUCKDB_V2_LOGICAL_TYPE_ID as Id;
     let f = factory(context)?;
-    let mut function = Function(std::ptr::null_mut());
-    call!(duckdb_v2_table_function_create(f, &mut function.0))?;
+    let function = Function::create(f)?;
     let tf = function.0;
     call!(duckdb_v2_table_function_set_name(tf, &as_str(scan::FUNCTION)))?;
     let mut sig: s::duckdb_v2_function_signature_handle = std::ptr::null_mut();
