@@ -5,7 +5,19 @@ name: acceptance
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "bench/**"
+      - "polars-tparquet/**"
+      - "trino/**"
+      - "brand/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "bench/**"
+      - "polars-tparquet/**"
+      - "trino/**"
+      - "brand/**"
+      - "**/*.md"
   workflow_dispatch:
 
 permissions:

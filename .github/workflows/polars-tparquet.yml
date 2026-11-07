@@ -3,7 +3,29 @@ name: polars-tparquet
 on:
   push:
     branches: [main]
+    paths:
+      - "polars-tparquet/**"
+      - "python/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/polars-tparquet.yml"
   pull_request:
+    paths:
+      - "polars-tparquet/**"
+      - "python/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/polars-tparquet.yml"
   schedule:
     - cron: "17 5 * * 2" # weekly: thorough property tests
   workflow_dispatch:
