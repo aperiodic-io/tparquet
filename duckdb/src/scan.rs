@@ -698,6 +698,10 @@ mod tests {
         let opts = ReadOptions { file_row_number: true, ..Default::default() };
         assert_eq!(bound_names(&bind(vec![a.clone()], opts).unwrap()), strings(&["id", "name", "file_row_number"]));
         assert!(bind(vec![], ReadOptions::default()).is_err());
+        // the file system has no Debug: the rest shows
+        let shown = format!("{:?}", bind(vec![a.clone()], ReadOptions::default()).unwrap());
+        assert!(shown.starts_with(&format!("Bound {{ files: [{a:?}], columns: [")), "{shown}");
+        assert!(shown.contains("options: ReadOptions {") && shown.ends_with(", .. }"), "{shown}");
     }
 
     fn bound_names(b: &Bound) -> Vec<String> {

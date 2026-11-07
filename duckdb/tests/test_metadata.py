@@ -67,6 +67,12 @@ def test_errors_name_the_file(con, files, tmp_path):
     bad.write_bytes(b"PAR1 nothing PAR1")
     with pytest.raises(duckdb.Error, match="cannot read .*bad.parquet as Parquet"):
         rows(con, f"SELECT * FROM tparquet_metadata('{bad}')")
+    # a file of 0 bytes opens (its size is 0, not an error) and is not Parquet
+    empty = tmp_path / "zero.parquet"
+    empty.write_bytes(b"")
+    for function in ["tparquet_metadata", "read_tparquet"]:
+        with pytest.raises(duckdb.Error, match=r"cannot read .*zero.parquet as Parquet: .*too small"):
+            rows(con, f"SELECT * FROM {function}('{empty}')")
     with pytest.raises(duckdb.Error, match="no files match"):
         rows(con, f"SELECT * FROM tparquet_metadata('{files}/none-*.parquet')")
     with pytest.raises(duckdb.Error, match="the path is NULL"):

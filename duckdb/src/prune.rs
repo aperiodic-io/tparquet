@@ -543,6 +543,56 @@ mod tests {
 
     /// The statistics of a file the tparquet writer wrote, column by column, as the scan reads
     /// them for the DuckDB type of each column.
+    /// The metadata of a file of `schema` (a Parquet message type) without row groups, whose
+    /// columns all have `order`.
+    fn metadata_of(schema: &str, order: ColumnOrder) -> ParquetMetaData {
+        use parquet::file::metadata::FileMetaData;
+        use parquet::schema::{parser::parse_message_type, types::SchemaDescriptor};
+        use std::sync::Arc;
+        let schema = Arc::new(SchemaDescriptor::new(Arc::new(parse_message_type(schema).unwrap())));
+        let orders = vec![order; schema.num_columns()];
+        ParquetMetaData::new(FileMetaData::new(1, 0, None, None, schema, Some(orders)), vec![])
+    }
+
+    #[test]
+    fn each_condition_of_a_reading_is_needed() {
+        let schema = "message m {
+            required int64 u (INTEGER(64, false));
+            required binary s (STRING);
+            required binary b;
+            required int32 i;
+            required double f;
+            required int64 t (TIMESTAMP(MILLIS, false));
+        }";
+        let unsigned = metadata_of(schema, ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED));
+        let undefined = metadata_of(schema, ColumnOrder::UNDEFINED);
+        let (u, s, b, i, f) = (0, 1, 2, 3, 4);
+        // unsigned integers and strings: the right type, but bounds of an unknown order
+        assert_eq!(reading(&unsigned, u, &SqlType::UBigInt), Some(Reading::Unsigned));
+        assert_eq!(reading(&undefined, u, &SqlType::UBigInt), None);
+        assert_eq!(reading(&unsigned, s, &SqlType::Varchar), Some(Reading::Bytes));
+        assert_eq!(reading(&undefined, s, &SqlType::Varchar), None);
+        // the right physical type, but another logical type
+        assert_eq!(reading(&unsigned, u, &SqlType::BigInt), None);
+        assert_eq!(reading(&unsigned, b, &SqlType::Varchar), None);
+        assert_eq!(reading(&unsigned, i, &SqlType::Date), None);
+        // no logical type, but another physical type
+        assert_eq!(reading(&unsigned, f, &SqlType::BigInt), None);
+        assert_eq!(reading(&undefined, i, &SqlType::BigInt), Some(Reading::Signed));
+        // a timestamp column is read only as its own unit
+        assert_eq!(reading(&undefined, 5, &SqlType::TimestampMs), Some(Reading::Signed));
+        assert_eq!(reading(&undefined, 5, &SqlType::TimestampNs), None);
+    }
+
+    #[test]
+    fn one_nan_bound_bounds_nothing() {
+        for (min, max) in [(f64::NAN, 1.0), (-1.0, f64::NAN)] {
+            let s = Statistics::double(Some(min), Some(max), None, Some(0), false);
+            let got = stats_of(Some(&s), Reading::Float, 5);
+            assert_eq!((got.min, got.max, got.nan, got.nulls), (None, None, true, Some(0)), "{min} {max}");
+        }
+    }
+
     #[test]
     fn reads_the_statistics_of_each_type_a_file_holds() {
         use arrow_array::{

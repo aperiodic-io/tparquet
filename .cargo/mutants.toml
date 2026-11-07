@@ -22,6 +22,14 @@ exclude_re = [
     # is converted. Not destroying them leaks memory DuckDB accounts to the database and changes
     # nothing a query can observe (equivalent mutants).
     'duckdb/src/v2/copy\.rs:.*<impl Drop for (Function|Collection|SharedScan|WorkerScan)>::drop',
+    # The same for the C API v1 file system of a bind and the open options of a file: not
+    # destroying them leaks a few bytes and changes nothing a query can observe (equivalent
+    # mutants).
+    'duckdb/src/vfs1\.rs:.*<impl Drop for (DuckFs|Options)>::drop',
+    # duckdb_file_system_open sets the file handle exactly when it succeeds, so "failed or no
+    # handle" and "failed and no handle" are the same condition; the handle check only guards
+    # against a DuckDB that broke that contract (equivalent mutant).
+    'duckdb/src/vfs1\.rs:.*replace \|\| with && in <impl FileSystem for DuckFs>::open',
     # Scan::next skips record batches without rows, because a chunk of 0 rows would end
     # DuckDB's scan early; the Parquet reader never yields one (not even for a row group
     # without rows, as in testdata/files/empty.parquet), so `> 0`, `>= 0` and `true` read the
