@@ -13,7 +13,7 @@
 | `rust/tparquet` | high-level Rust API (auto selection, transcode) and the `tparquet` CLI |
 | `go/` | Go package: arrow-go codec plugin and writer helpers |
 | `python/` | Python package: pyarrow, pandas, Polars, DuckDB |
-| `duckdb/` | DuckDB loadable extension |
+| `duckdb/` | DuckDB loadable extension: a C API v1 build (any DuckDB serving v1.5.6) and a C API v2 build (DuckDB 2.0.0) from one library |
 | `polars-tparquet/` | Polars plugin package: `scan_tparquet`, `read_tparquet`, `tparquet` namespaces |
 | `java/` | Maven: JNI binding, fork of parquet-java 1.17.0 (`java/parquet-java/FORK.md`), `tparquet` library, Spark data source |
 | `datafusion/` | DataFusion 55.2 connector, its own Cargo workspace on a fork of parquet 59.3.2 (`datafusion/parquet/FORK.md`) |
