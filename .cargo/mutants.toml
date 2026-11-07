@@ -34,6 +34,10 @@ exclude_re = [
     # is the same. The arm stays because the header calls to_string diagnostic only
     # (equivalent mutant).
     'duckdb/src/v2/sys\.rs:.*delete match arm Id::DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR in Value::val',
+    # v2::filter::predicate reads `column op constant`; scalar() answers None for anything but
+    # a constant as well (duckdb_v2_expression_constant_get_value fails), so the guard only
+    # spares a failing call (equivalent mutant).
+    'duckdb/src/v2/filter\.rs:.*replace match guard constant\(\*b\) with true in predicate',
     # duckdb_file_system_open sets the file handle exactly when it succeeds, so "failed or no
     # handle" and "failed and no handle" are the same condition; the handle check only guards
     # against a DuckDB that broke that contract (equivalent mutant).

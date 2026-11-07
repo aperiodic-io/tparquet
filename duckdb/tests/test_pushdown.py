@@ -33,7 +33,8 @@ SELECT
     (i * 0.01)::DECIMAL(9, 2) AS dec9,
     (i * 0.001)::DECIMAL(30, 3) AS dec30,
     CASE WHEN i // {GROUP} = 5 THEN NULL ELSE i END AS gap,
-    i % 2 = 0 AS even
+    i % 2 = 0 AS even,
+    i // {GROUP} AS grp
 FROM range({N}) r(i)
 """
 
@@ -92,6 +93,12 @@ RULE_OUT = [
     f"id < 100 OR id > {N - 100}",
     f"{LO} > id",
     f"id BETWEEN {HI} AND {HI + 1000}",
+    f"id <= {LO - 1}",
+    # a row group of one value is ruled out by <> that value
+    "grp <> 5",
+    # DuckDB hands top-level conjunctions over as separate filters: an AND arrives nested (over
+    # one column: of `(id < 100 AND even) OR ...` it also derives `id < 100 OR ...`)
+    f"(id > 10 AND id < 100) OR (id > {HI} AND id < {HI + 100})",
     f"i32 < {LO}",
     f"u64 > {HI + 500}",
     f"dbl < {LO // 2}",
