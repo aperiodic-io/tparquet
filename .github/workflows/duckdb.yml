@@ -3,7 +3,27 @@ name: duckdb
 on:
   push:
     branches: [main]
+    paths:
+      - "duckdb/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/duckdb.yml"
   pull_request:
+    paths:
+      - "duckdb/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/duckdb.yml"
   schedule:
     - cron: "41 4 * * 2" # weekly full mutation run of the extension
   workflow_dispatch:
