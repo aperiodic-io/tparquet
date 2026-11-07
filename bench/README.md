@@ -62,6 +62,38 @@ Speed, in MB/s of Arrow data (higher is faster; one thread per writer and reader
   decoding pcodec costs more per value than ZSTD on these columns. The small bar and metric
   files read fastest as tparquet, since there is less to read.
 
+### Observability: TSBS DevOps metrics
+
+Synthetic, generated, and measured in a separate run (2026-11-07); see
+[Observability data (TSBS)](#observability-data-tsbs). `RESULTS.md` has all 10 datasets, and its
+*All* row includes them (41 datasets, 160M rows); the tables above are the 31 market datasets.
+
+| Data | Rows | ZSTD(9) | ZSTD(9) tuned | tparquet | vs ZSTD(9) | vs tuned |
+|---|---:|---:|---:|---:|---:|---:|
+| 9 measurements, in time order | 7.8M | 107.2 MB | 80.4 MB | 75.0 MB | **0.70×** | **0.93×** |
+| `cpu` in time order | 864K | 7.8 MB | 7.7 MB | 7.4 MB | **0.95×** | **0.95×** |
+| `cpu` by host and time | 864K | 7.1 MB | 3.2 MB | 2.5 MB | **0.35×** | **0.77×** |
+| **All 10** | 8.6M | 114.3 MB | 83.6 MB | 77.5 MB | **0.68×** | **0.93×** |
+
+(The first row is the first nine datasets of `RESULTS.md`: every measurement once, in the order
+the generator writes it.)
+
+- tparquet is smaller on all 10 datasets: 0.35× to 0.95× of ZSTD(9), and 0.77× to 0.96× of
+  tuned ZSTD(9). Against the tuned baseline the gain is small, 7% over the whole group.
+- **Row order decides it.** The generator writes every host's report of a tick before the next
+  tick, so consecutive rows come from different hosts and each column jumps between unrelated
+  random walks. The same `cpu` rows by host and time compress to 2.5 MB with tparquet, 3× less
+  than in time order (7.4 MB); tuned ZSTD(9) gets 2.4× (7.7 to 3.2 MB) and untuned ZSTD(9)
+  hardly gains (7.8 to 7.1 MB). A metric store on Parquet should sort by series first. This is
+  the same effect as the NYSE quotes above, where symbols are interleaved.
+- `mem` gains the least (0.84× of ZSTD(9)): its three percentages are float64 and its sizes
+  random walks of up to 16 GiB.
+- Speed, in MB/s of Arrow data, over the 10 datasets (1.78 GB): tparquet writes at 90 (ZSTD(9):
+  202, tuned: 365) and reads at 1,634 (ZSTD(9): 1,758, tuned: 2,282). These tables are wide and
+  half of every table is tags, which keep ZSTD: of 21 `cpu` columns, 11 are PCODEC (the time
+  and the ten fields). Writing is about 4× slower than the tuned writer, because each numeric
+  column is compressed both ways on the first batch.
+
 ## What is measured
 
 Every dataset is read as its provider delivers it, typed as the provider documents it, and

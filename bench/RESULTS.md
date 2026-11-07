@@ -4,6 +4,8 @@ The last run of `make bench` (2026-11-06; tparquet 0f2845d, pyarrow 26.0.1,
 Python 3.14.6, on a 4-vCPU cloud VM). How it is measured: [README.md](README.md#what-is-measured).
 Size ratios below 1 mean tparquet is smaller; speeds are MB/s of Arrow data, higher is faster.
 
+The Observability (TSBS) rows come from a separate run, `tpq-bench run observability` on 2026-11-07 (tparquet e550317, pyarrow 26.0.1, Python 3.14.6, 4 vCPUs), merged into the results of the run above; the other rows are unchanged. Compare speeds within a group, and across groups only knowing they are two runs. The TSBS data is generated, not delivered: see [README.md](README.md#observability-data-tsbs).
+
 | Data type | Datasets | Rows | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) | tparquet / tuned |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Trades | 5 | 138,865,292 | 737.0 MB | 520.0 MB | 362.2 MB | **0.491×** | **0.696×** |
@@ -12,7 +14,8 @@ Size ratios below 1 mean tparquet is smaller; speeds are MB/s of Arrow data, hig
 | Bars (OHLCV) | 1 | 8,928 | 296 KB | 160 KB | 108 KB | **0.364×** | **0.673×** |
 | Metrics (5m bars) | 18 | 160,704 | 10.5 MB | 6.4 MB | 5.8 MB | **0.551×** | **0.905×** |
 | Derivatives (funding, mark, index, open interest) | 1 | 118,524 | 2.2 MB | 1.6 MB | 882 KB | **0.395×** | **0.553×** |
-| **All** | 31 | 151,499,256 | 957.1 MB | 700.7 MB | 478.6 MB | **0.500×** | **0.683×** |
+| Observability (TSBS DevOps server metrics) | 10 | 8,640,000 | 114.3 MB | 83.6 MB | 77.5 MB | **0.678×** | **0.926×** |
+| **All** | 41 | 160,139,256 | 1.07 GB | 784.3 MB | 556.1 MB | **0.519×** | **0.709×** |
 
 Speed, in MB/s of Arrow data (the columns' size in memory):
 
@@ -24,7 +27,8 @@ Speed, in MB/s of Arrow data (the columns' size in memory):
 | Bars (OHLCV) | 436 KB | 32 | 87 | 11 | 383 | 542 | 749 |
 | Metrics (5m bars) | 10.5 MB | 55 | 84 | 8 | 302 | 502 | 587 |
 | Derivatives (funding, mark, index, open interest) | 12.2 MB | 105 | 93 | 38 | 1,038 | 1,440 | 1,387 |
-| **All** | 9.46 GB | 104 | 155 | 109 | 1,031 | 1,225 | 925 |
+| Observability (TSBS DevOps server metrics) | 1.78 GB | 202 | 365 | 90 | 1,758 | 2,282 | 1,634 |
+| **All** | 11.23 GB | 113 | 171 | 106 | 1,103 | 1,322 | 993 |
 
 ### Trades
 
@@ -135,3 +139,31 @@ Speed, in MB/s of Arrow data (the columns' size in memory):
 | Provider | Data | Arrow data | Write ZSTD(9) | Write tuned | Write tparquet | Read ZSTD(9) | Read tuned | Read tparquet |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | Tardis.dev | derivative ticker, Binance USDⓈ-M BTCUSDT, 2025-06-01 (CSV) | 12.2 MB | 105 | 93 | 38 | 1,038 | 1,440 | 1,387 |
+
+### Observability (TSBS DevOps server metrics)
+
+| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) | tparquet / tuned | PCODEC columns |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| TSBS | devops cpu, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 8.0 MB | 7.8 MB | 7.7 MB | 7.4 MB | 0.947× | 0.953× | 11 of 21 |
+| TSBS | devops diskio, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 17.5 MB | 11.4 MB | 7.0 MB | 6.6 MB | 0.576× | 0.934× | 8 of 19 |
+| TSBS | devops disk, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 6.1 MB | 3.7 MB | 2.1 MB | 2.1 MB | 0.560× | 0.964× | 3 of 20 |
+| TSBS | devops kernel, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 9.2 MB | 7.6 MB | 5.0 MB | 4.7 MB | 0.617× | 0.930× | 6 of 17 |
+| TSBS | devops mem, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 50.1 MB | 37.2 MB | 33.5 MB | 31.2 MB | 0.838× | 0.932× | 9 of 20 |
+| TSBS | devops net, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 18.6 MB | 12.9 MB | 8.0 MB | 7.4 MB | 0.575× | 0.926× | 9 of 20 |
+| TSBS | devops nginx, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 5.8 MB | 4.7 MB | 3.1 MB | 2.9 MB | 0.624× | 0.936× | 4 of 20 |
+| TSBS | devops postgresl, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 4.3 MB | 2.4 MB | 1.5 MB | 1.4 MB | 0.576× | 0.882× | 17 of 27 |
+| TSBS | devops redis, 100 hosts, 1 day at 10 s, in time order (generated) | 864,000 | 29.5 MB | 19.6 MB | 12.4 MB | 11.5 MB | 0.586× | 0.927× | 31 of 44 |
+| TSBS | devops cpu, 100 hosts, 1 day at 10 s, by host and time (generated) | 864,000 | 9.2 MB | 7.1 MB | 3.2 MB | 2.5 MB | 0.346× | 0.768× | 11 of 21 |
+
+| Provider | Data | Arrow data | Write ZSTD(9) | Write tuned | Write tparquet | Read ZSTD(9) | Read tuned | Read tparquet |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| TSBS | devops cpu, 100 hosts, 1 day at 10 s, in time order (generated) | 162.2 MB | 396 | 386 | 94 | 2,381 | 2,419 | 1,632 |
+| TSBS | devops diskio, 100 hosts, 1 day at 10 s, in time order (generated) | 154.4 MB | 141 | 328 | 80 | 1,264 | 2,049 | 1,054 |
+| TSBS | devops disk, 100 hosts, 1 day at 10 s, in time order (generated) | 159.9 MB | 271 | 362 | 84 | 1,554 | 2,319 | 2,028 |
+| TSBS | devops kernel, 100 hosts, 1 day at 10 s, in time order (generated) | 134.5 MB | 367 | 334 | 80 | 1,781 | 2,198 | 1,600 |
+| TSBS | devops mem, 100 hosts, 1 day at 10 s, in time order (generated) | 155.3 MB | 86 | 200 | 56 | 1,125 | 1,993 | 1,455 |
+| TSBS | devops net, 100 hosts, 1 day at 10 s, in time order (generated) | 155.3 MB | 117 | 346 | 68 | 1,457 | 2,011 | 1,394 |
+| TSBS | devops nginx, 100 hosts, 1 day at 10 s, in time order (generated) | 161.7 MB | 488 | 483 | 119 | 2,348 | 2,546 | 1,963 |
+| TSBS | devops postgresl, 100 hosts, 1 day at 10 s, in time order (generated) | 203.7 MB | 450 | 540 | 152 | 3,053 | 3,182 | 2,403 |
+| TSBS | devops redis, 100 hosts, 1 day at 10 s, in time order (generated) | 327.6 MB | 160 | 368 | 92 | 1,973 | 2,119 | 1,554 |
+| TSBS | devops cpu, 100 hosts, 1 day at 10 s, by host and time (generated) | 162.2 MB | 455 | 538 | 140 | 1,694 | 2,364 | 1,962 |
