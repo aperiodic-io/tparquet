@@ -12,6 +12,7 @@ pub mod copy;
 pub mod ffi;
 pub mod fs;
 pub mod metadata;
+pub mod prune;
 pub mod read;
 pub mod scan;
 pub mod types;
