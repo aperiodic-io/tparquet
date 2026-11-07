@@ -17,12 +17,15 @@ crate-type = ["cdylib", "rlib"]
 # the C extension API (v1.5.6, which DuckDB 2.0.0 serves) through function pointers that DuckDB
 # hands over at LOAD; nothing links libduckdb
 duckdb = { version = "=1.20000.1", default-features = false, features = ["loadable-extension", "vtab-arrow"] }
+# the same crate with the C API v2 bindings as well, for the C API v2 build
+# (`tparquet_init_c_api_v2`, src/v2): function pointers DuckDB hands over at LOAD
+libduckdb-sys = { version = "=1.20000.1", default-features = false, features = ["loadable-extension", "loadable-extension-v2"] }
 tparquet = { path = "../rust/tparquet" }
 parquet = { workspace = true, features = ["arrow", "zstd", "snap", "lz4", "brotli", "flate2-zlib-rs", "pcodec"] }
 arrow-array.workspace = true
-arrow-schema.workspace = true
+arrow-schema = { workspace = true, features = ["ffi"] }
 arrow-buffer.workspace = true
-arrow-data.workspace = true
+arrow-data = { workspace = true, features = ["ffi"] }
 arrow-cast.workspace = true
 arrow-select.workspace = true
 glob = "0.3"
