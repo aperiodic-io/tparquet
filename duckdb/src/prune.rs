@@ -548,7 +548,7 @@ mod tests {
         use arrow_array::{
             ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int8Array,
             Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-            TimestampSecondArray, UInt32Array, UInt64Array,
+            TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
         };
         use arrow_schema::{Field, Schema};
         use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -565,6 +565,8 @@ mod tests {
             ("ms", Arc::new(TimestampMillisecondArray::from(vec![3, 1, 2]))),
             ("us_utc", Arc::new(TimestampMicrosecondArray::from(vec![9, 7, 8]).with_timezone("UTC"))),
             ("sec", Arc::new(TimestampSecondArray::from(vec![1, 2, 3]))),
+            ("us", Arc::new(TimestampMicrosecondArray::from(vec![6, 4, 5]))),
+            ("ns", Arc::new(TimestampNanosecondArray::from(vec![i64::MAX, -1, 0]))),
             ("dec18", Arc::new(Decimal128Array::from(vec![-150, 99, 3]).with_precision_and_scale(10, 2).unwrap())),
             (
                 "dec30",
@@ -610,6 +612,8 @@ mod tests {
         assert_eq!(got("d"), Some((Some(int(-5)), Some(int(20)), Some(0), false)));
         assert_eq!(got("ms"), Some((Some(int(1)), Some(int(3)), Some(0), false)));
         assert_eq!(got("us_utc"), Some((Some(int(7)), Some(int(9)), Some(0), false)));
+        assert_eq!(got("us"), Some((Some(int(4)), Some(int(6)), Some(0), false)));
+        assert_eq!(got("ns"), Some((Some(int(-1)), Some(int(i64::MAX.into())), Some(0), false)));
         assert_eq!(got("dec18"), Some((Some(int(-150)), Some(int(99)), Some(0), false)));
         assert_eq!(got("dec30"), Some((Some(int(-(1i128 << 70))), Some(int(1i128 << 80)), Some(0), false)));
         // seconds are stored as milliseconds: their statistics are not in the unit of a
@@ -634,6 +638,12 @@ mod tests {
         assert_eq!(reading(parquet, us, &SqlType::TimestampTz), Some(Reading::Signed));
         let ms = schema.index_of("ms").unwrap();
         assert_eq!(reading(parquet, ms, &SqlType::Timestamp), None);
+        // each unit reads only as its own type
+        let ns = schema.index_of("ns").unwrap();
+        assert_eq!(reading(parquet, ns, &SqlType::TimestampNs), Some(Reading::Signed));
+        for other in [SqlType::TimestampMs, SqlType::Timestamp, SqlType::TimestampTz] {
+            assert_eq!(reading(parquet, ns, &other), None, "{other}");
+        }
         let d = schema.index_of("dec18").unwrap();
         assert_eq!(reading(parquet, d, &SqlType::Decimal { width: 10, scale: 3 }), None);
         // without statistics nothing is known but the rows
