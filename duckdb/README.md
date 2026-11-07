@@ -328,9 +328,10 @@ make mutation                  # cargo mutants on this crate
 - Unit tests (`src/*.rs`): the type mapping both ways, array normalization, path expansion,
   bind and projection slots, the row-group queue (also across threads), COPY options, the
   writer, DuckDB vector layouts converted to Arrow (on vectors laid out in memory), the footer.
-- `tests/sql.rs` packages the library this build produced as both builds and runs pytest on
-  each (`TPARQUET_DUCKDB_API=v1`/`v2`), so `cargo test`, and every mutant, checks what DuckDB
-  actually loads. It also builds the
+- `tests/sql.rs` packages the library this build produced and runs pytest on it, so `cargo
+  test`, and every mutant, checks what DuckDB actually loads: once packaged as the C API v1
+  build and once as the C API v2 build (`TPARQUET_DUCKDB_API=v1|v2` tells the tests which;
+  where the builds differ, the tests assert each one's behavior). It also builds the
   `tparquet` CLI the tests transcode and `verify` with.
 - `tests/test_conformance.py`: every `testdata/files/*.parquet` read with
   `read_tparquet`, fetched from DuckDB as Arrow and turned into canonical JSON
