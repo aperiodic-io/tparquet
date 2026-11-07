@@ -151,6 +151,18 @@ pub fn predicate(e: s::duckdb_v2_expression_handle, columns: &Columns) -> Option
         }
         E::DUCKDB_V2_EXPRESSION_TYPE_OPERATOR_IS_NULL => Some(Predicate::IsNull(columns.column(*cs.first()?)?)),
         E::DUCKDB_V2_EXPRESSION_TYPE_OPERATOR_IS_NOT_NULL => Some(Predicate::IsNotNull(columns.column(*cs.first()?)?)),
+        E::DUCKDB_V2_EXPRESSION_TYPE_COMPARE_BETWEEN => {
+            // the API does not say whether the bounds are inclusive: taken as inclusive, the
+            // weaker predicate
+            let [x, lo, hi] = cs.as_slice() else { return None };
+            let column = columns.column(*x)?;
+            let bound =
+                |c: s::duckdb_v2_expression_handle| constant(c).then(|| scalar(c, &columns.types[column])).flatten();
+            Some(Predicate::And(vec![
+                Predicate::Compare { column, op: Op::Ge, value: bound(*lo)? },
+                Predicate::Compare { column, op: Op::Le, value: bound(*hi)? },
+            ]))
+        }
         E::DUCKDB_V2_EXPRESSION_TYPE_COMPARE_IN => {
             let (first, rest) = cs.split_first()?;
             let column = columns.column(*first)?;

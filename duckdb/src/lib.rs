@@ -21,6 +21,7 @@ macro_rules! call {
 pub mod chunk;
 pub mod copy;
 pub mod ffi;
+pub mod footer;
 pub mod fs;
 pub mod metadata;
 pub mod prune;
