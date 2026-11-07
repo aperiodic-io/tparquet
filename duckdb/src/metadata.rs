@@ -27,6 +27,18 @@ pub const WASM_SECTION_HEADER: &[u8] = b"\x00\x93\x04\x10duckdb_signature\x80\x0
 
 /// The ABI of an extension built on DuckDB's C extension API v1 with a stable API version.
 pub const ABI_C_STRUCT: &str = "C_STRUCT";
+/// The ABI of an extension built on DuckDB's unstable C API (v2 in DuckDB 2.0): it loads only
+/// in the DuckDB version named in the footer.
+pub const ABI_C_STRUCT_UNSTABLE: &str = "C_STRUCT_UNSTABLE";
+
+/// The C API a build of the extension is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Api {
+    /// C API v1.5.6, stable: any DuckDB that serves it.
+    V1,
+    /// C API v2, unstable in DuckDB 2.0.0: only DuckDB 2.0.0.
+    V2,
+}
 
 /// What the footer says about the extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,13 +104,22 @@ impl Metadata {
 }
 
 impl Metadata {
-    /// The metadata of this build of the extension, for `platform`.
+    /// The metadata of the C API v1 build of the extension, for `platform`.
     pub fn for_platform(platform: &str) -> Self {
+        Self::for_api(platform, Api::V1)
+    }
+
+    /// The metadata of the build of the extension for `api`, for `platform`.
+    pub fn for_api(platform: &str, api: Api) -> Self {
+        let (duckdb_version, abi_type) = match api {
+            Api::V1 => (crate::C_API_VERSION, ABI_C_STRUCT),
+            Api::V2 => (crate::v2::DUCKDB_VERSION, ABI_C_STRUCT_UNSTABLE),
+        };
         Self {
             platform: platform.to_string(),
-            duckdb_version: crate::C_API_VERSION.to_string(),
+            duckdb_version: duckdb_version.to_string(),
             extension_version: format!("v{}", env!("CARGO_PKG_VERSION")),
-            abi_type: ABI_C_STRUCT.to_string(),
+            abi_type: abi_type.to_string(),
         }
     }
 }
@@ -110,6 +131,39 @@ pub fn package(library: &[u8], metadata: &Metadata) -> Result<Vec<u8>, String> {
     }
     let mut out = library.to_vec();
     out.extend(metadata.footer()?);
+    Ok(out)
+}
+
+/// DuckDB hashes an extension in chunks of this size for its signature.
+pub const SIGNING_CHUNK: usize = 1 << 20;
+
+/// The digest DuckDB checks an extension's signature against
+/// (`ExtensionHelper::CheckExtensionSignature`): the file without its 256-byte signature, cut in
+/// chunks of 1 MiB, the SHA-256 of each chunk, and the SHA-256 of their concatenation. The
+/// signature is an RSA PKCS#1 v1.5 signature of this digest as a SHA-256 digest, as
+/// `openssl pkeyutl -sign -pkeyopt digest:sha256 -in DIGEST` makes it.
+pub fn signing_hash(file: &[u8]) -> Result<[u8; 32], String> {
+    use sha2::{Digest, Sha256};
+    let content = file.len().checked_sub(SIGNATURE_LEN).filter(|_| Metadata::parse(file).is_some());
+    let Some(end) = content else { return Err("not a packaged extension: no metadata footer".into()) };
+    let mut chunks = Sha256::new();
+    for chunk in file[..end].chunks(SIGNING_CHUNK) {
+        chunks.update(Sha256::digest(chunk));
+    }
+    Ok(chunks.finalize().into())
+}
+
+/// The packaged extension `file` with `signature` (256 bytes) in place of its signature.
+pub fn with_signature(file: &[u8], signature: &[u8]) -> Result<Vec<u8>, String> {
+    if signature.len() != SIGNATURE_LEN {
+        return Err(format!("a signature is {SIGNATURE_LEN} bytes (RSA 2048), not {}", signature.len()));
+    }
+    if Metadata::parse(file).is_none() {
+        return Err("not a packaged extension: no metadata footer".into());
+    }
+    let mut out = file.to_vec();
+    let start = out.len() - SIGNATURE_LEN;
+    out[start..].copy_from_slice(signature);
     Ok(out)
 }
 
@@ -235,5 +289,41 @@ mod tests {
         let mut bad = m;
         bad.platform = "x".repeat(40);
         assert!(package(&lib, &bad).is_err());
+    }
+
+    #[test]
+    fn the_signing_hash_is_duckdbs_two_level_hash() {
+        use sha2::{Digest, Sha256};
+        let small = package(b"library bytes", &meta()).unwrap();
+        let content = &small[..small.len() - SIGNATURE_LEN];
+        let expected: [u8; 32] = Sha256::digest(Sha256::digest(content)).into();
+        assert_eq!(signing_hash(&small).unwrap(), expected);
+        // more than one chunk: the hash of the chunks' hashes, the last chunk short
+        let library: Vec<u8> = (0..SIGNING_CHUNK * 2 + 10).map(|i| (i % 251) as u8).collect();
+        let big = package(&library, &meta()).unwrap();
+        let content = &big[..big.len() - SIGNATURE_LEN];
+        let mut h = Sha256::new();
+        h.update(Sha256::digest(&content[..SIGNING_CHUNK]));
+        h.update(Sha256::digest(&content[SIGNING_CHUNK..2 * SIGNING_CHUNK]));
+        h.update(Sha256::digest(&content[2 * SIGNING_CHUNK..]));
+        let expected: [u8; 32] = h.finalize().into();
+        assert_eq!(signing_hash(&big).unwrap(), expected);
+        // the signature itself is not hashed
+        let signed = with_signature(&big, &[7u8; SIGNATURE_LEN]).unwrap();
+        assert_eq!(signing_hash(&signed).unwrap(), expected);
+        assert!(signing_hash(b"short").is_err());
+        assert!(signing_hash(&library).is_err());
+    }
+
+    #[test]
+    fn a_signature_replaces_the_empty_one() {
+        let file = package(b"library", &meta()).unwrap();
+        let signed = with_signature(&file, &[0xabu8; SIGNATURE_LEN]).unwrap();
+        assert_eq!(signed.len(), file.len());
+        assert_eq!(&signed[..file.len() - SIGNATURE_LEN], &file[..file.len() - SIGNATURE_LEN]);
+        assert!(signed[file.len() - SIGNATURE_LEN..].iter().all(|&b| b == 0xab));
+        assert_eq!(Metadata::parse(&signed), Metadata::parse(&file));
+        assert!(with_signature(&file, &[0u8; 255]).unwrap_err().contains("not 255"));
+        assert!(with_signature(b"no footer here", &[0u8; SIGNATURE_LEN]).is_err());
     }
 }

@@ -7,13 +7,30 @@
 //!   and `COPY t FROM 'f.parquet' (FORMAT tparquet)`, a COPY function ([`write`], logic
 //!   in [`copy`] and [`chunk`]).
 
+/// Calls a C API v2 function that takes a trailing `err` slot, as a `Result`:
+/// `call!(duckdb_v2_x(a, b))`.
+macro_rules! call {
+    ($f:ident($($a:expr),* $(,)?)) => {{
+        let mut err: libduckdb_sys::v2::duckdb_v2_error_info_handle = std::ptr::null_mut();
+        #[allow(unused_unsafe)]
+        let code = unsafe { libduckdb_sys::v2::$f($($a,)* &mut err) };
+        $crate::v2::sys::check(code, err, stringify!($f))
+    }};
+}
+
 pub mod chunk;
 pub mod copy;
 pub mod ffi;
+pub mod footer;
+pub mod fs;
 pub mod metadata;
+pub mod prune;
 pub mod read;
 pub mod scan;
 pub mod types;
+pub mod v2;
+pub mod vfs1;
+pub mod vfs2;
 pub mod write;
 
 use duckdb::ffi as sys;

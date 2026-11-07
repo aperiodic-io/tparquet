@@ -61,7 +61,8 @@ unsafe fn bind_impl(info: ffi::duckdb_bind_info) -> Result<(), String> {
         file_row_number: flag(info, scan::FILE_ROW_NUMBER)?,
         union_by_name: flag(info, "union_by_name")?,
     };
-    let bound = Bound::bind(scan::expand(&patterns)?, options)?;
+    let fs: Arc<dyn crate::fs::FileSystem> = Arc::new(unsafe { crate::vfs1::DuckFs::of_bind(info) }?);
+    let bound = Bound::bind(fs.clone(), scan::expand(&patterns, fs.as_ref())?, options)?;
     let expected = unsafe { ffi::duckdb_table_function_bind_get_result_column_count(info) };
     if expected > 0 {
         // COPY ... FROM: DuckDB has set the target table's columns
@@ -181,7 +182,7 @@ fn write_batch(batch: &ScanBatch, slots: &[Slot], output: ffi::duckdb_data_chunk
             Slot::File { projected, .. } => {
                 // values DuckDB refuses (a decimal wider than its precision, in a damaged file)
                 // are an error of the file
-                let of_file = |e: String| format!("cannot read {}: {e}", batch.file.path.display());
+                let of_file = |e: String| format!("cannot read {}: {e}", batch.file.path);
                 let column = &batch.columns[*projected];
                 write_arrow_array_to_vector(column, &mut vector).map_err(|e| of_file(e.to_string()))?;
                 unsafe { write_intervals(column.as_ref(), vector) }.map_err(of_file)?;
@@ -189,7 +190,7 @@ fn write_batch(batch: &ScanBatch, slots: &[Slot], output: ffi::duckdb_data_chunk
             Slot::Filename => {
                 let flat = vector.flat_vector();
                 for row in 0..batch.num_rows {
-                    flat.insert(row, batch.file.name.as_str());
+                    flat.insert(row, batch.file.path.as_str());
                 }
             }
             Slot::FileRowNumber => {
@@ -248,7 +249,7 @@ pub fn table_function() -> Result<ffi::duckdb_table_function, String> {
     }
 }
 
-/// Registers `read_tparquet` on `connection`.
+/// Registers `read_tparquet` and `tparquet_metadata` on `connection`.
 ///
 /// # Safety
 /// `connection` is an open connection.
@@ -259,5 +260,95 @@ pub unsafe fn register(connection: ffi::duckdb_connection) -> Result<(), String>
     if state != ffi::duckdb_state_DuckDBSuccess {
         return Err(format!("cannot register {}", scan::FUNCTION));
     }
-    Ok(())
+    unsafe { metadata::register(connection) }
+}
+
+/// `tparquet_metadata(path)` ([`crate::footer`]): the row groups of the files, from footers.
+mod metadata {
+    use super::paths;
+    use crate::ffi::{c_string, drop_box, guard, into_raw, logical_type, owned_val};
+    use crate::footer::{self, Footers};
+    use duckdb::ffi;
+    use duckdb::vtab::arrow::write_arrow_array_to_vector;
+    use std::sync::Arc;
+
+    unsafe fn bind_impl(info: ffi::duckdb_bind_info) -> Result<(), String> {
+        let patterns = paths(unsafe { owned_val(ffi::duckdb_bind_get_parameter(info, 0)) })?;
+        let fs: Arc<dyn crate::fs::FileSystem> = Arc::new(unsafe { crate::vfs1::DuckFs::of_bind(info) }?);
+        let files = crate::scan::expand(&patterns, fs.as_ref())?;
+        for (name, t) in footer::columns() {
+            let lt = logical_type(&t)?;
+            let name = c_string(&name);
+            unsafe { ffi::duckdb_bind_add_result_column(info, name.as_ptr(), lt.0) };
+        }
+        let data = into_raw(Files { fs, files });
+        unsafe { ffi::duckdb_bind_set_bind_data(info, data, Some(drop_box::<Files>)) };
+        Ok(())
+    }
+
+    /// What bind found; the scan of each execution starts from here.
+    struct Files {
+        fs: Arc<dyn crate::fs::FileSystem>,
+        files: Vec<String>,
+    }
+
+    unsafe extern "C" fn bind(info: ffi::duckdb_bind_info) {
+        if let Err(e) = guard(|| unsafe { bind_impl(info) }) {
+            let e = c_string(&format!("{}: {e}", footer::FUNCTION));
+            unsafe { ffi::duckdb_bind_set_error(info, e.as_ptr()) };
+        }
+    }
+
+    unsafe extern "C" fn init(info: ffi::duckdb_init_info) {
+        let bind = unsafe { &*(ffi::duckdb_init_get_bind_data(info) as *const Files) };
+        let vector_size = unsafe { ffi::duckdb_vector_size() } as usize;
+        let footers = into_raw(Footers::new(bind.fs.clone(), bind.files.clone(), vector_size));
+        unsafe { ffi::duckdb_init_set_init_data(info, footers, Some(drop_box::<Footers>)) };
+        // one thread: the rows come in file order
+        unsafe { ffi::duckdb_init_set_max_threads(info, 1) };
+    }
+
+    unsafe fn function_impl(info: ffi::duckdb_function_info, output: ffi::duckdb_data_chunk) -> Result<(), String> {
+        let footers = unsafe { &*(ffi::duckdb_function_get_init_data(info) as *const Footers) };
+        let Some(arrays) = footers.next()? else {
+            unsafe { ffi::duckdb_data_chunk_set_size(output, 0) };
+            return Ok(());
+        };
+        for (i, array) in arrays.iter().enumerate() {
+            let mut vector = unsafe { ffi::duckdb_data_chunk_get_vector(output, i as u64) };
+            write_arrow_array_to_vector(array, &mut vector).map_err(|e| e.to_string())?;
+        }
+        unsafe { ffi::duckdb_data_chunk_set_size(output, arrays[0].len() as u64) };
+        Ok(())
+    }
+
+    unsafe extern "C" fn function(info: ffi::duckdb_function_info, output: ffi::duckdb_data_chunk) {
+        if let Err(e) = guard(|| unsafe { function_impl(info, output) }) {
+            let e = c_string(&format!("{}: {e}", footer::FUNCTION));
+            unsafe { ffi::duckdb_function_set_error(info, e.as_ptr()) };
+        }
+    }
+
+    /// Registers `tparquet_metadata` on `connection`.
+    ///
+    /// # Safety
+    /// `connection` is an open connection.
+    pub unsafe fn register(connection: ffi::duckdb_connection) -> Result<(), String> {
+        unsafe {
+            let mut f = ffi::duckdb_create_table_function();
+            let name = c_string(footer::FUNCTION);
+            ffi::duckdb_table_function_set_name(f, name.as_ptr());
+            let any = crate::ffi::OwnedType(ffi::duckdb_create_logical_type(ffi::DUCKDB_TYPE_DUCKDB_TYPE_ANY));
+            ffi::duckdb_table_function_add_parameter(f, any.0);
+            ffi::duckdb_table_function_set_bind(f, Some(bind));
+            ffi::duckdb_table_function_set_init(f, Some(init));
+            ffi::duckdb_table_function_set_function(f, Some(function));
+            let state = ffi::duckdb_register_table_function(connection, f);
+            ffi::duckdb_destroy_table_function(&mut f);
+            if state != ffi::duckdb_state_DuckDBSuccess {
+                return Err(format!("cannot register {}", footer::FUNCTION));
+            }
+        }
+        Ok(())
+    }
 }

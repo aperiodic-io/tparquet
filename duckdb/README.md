@@ -21,9 +21,33 @@ COPY (SELECT ts, price, qty FROM ticks) TO 'ticks.parquet'
 COPY ticks FROM 'ticks.parquet' (FORMAT tparquet);
 ```
 
-It is written in Rust on DuckDB's C extension API (v1, version `v1.5.6`, which DuckDB 2.0.0
-serves) with the `duckdb` crate 1.20000.1 (`loadable-extension`, `vtab-arrow`), and the Parquet
-fork in [`rust/parquet`](../rust/parquet) through [`rust/tparquet`](../rust/tparquet).
+It is written in Rust on DuckDB's C extension API, with the `duckdb` crate 1.20000.1
+(`loadable-extension`, `vtab-arrow`) and `libduckdb-sys` 1.20000.1 (`loadable-extension-v2`), and
+the Parquet fork in [`rust/parquet`](../rust/parquet) through [`rust/tparquet`](../rust/tparquet).
+
+### Two builds
+
+One library, packaged twice (`make build`):
+
+| | `build/tparquet.duckdb_extension` | `build/v2/tparquet.duckdb_extension` |
+|---|---|---|
+| C API | v1, version `v1.5.6` (stable) | v2 (unstable in DuckDB 2.0.0) |
+| loads in | any DuckDB that serves C API v1.5.6 (2.0.0 and later v1.x servers) | DuckDB 2.0.0 only (ABI `C_STRUCT_UNSTABLE`) |
+| entrypoint | `tparquet_init_c_api` | `tparquet_init_c_api_v2` |
+| remote files (httpfs, S3, registered file systems) | yes | yes |
+| globs over remote files | no: list the files | yes (DuckDB's glob) |
+| filter pushdown: row groups skipped by statistics | no | yes |
+| parallel scans that keep the file order | no: ordered consumers run the scan on one thread | yes (batch indexes) |
+| `count(*)` | decodes the first column | decodes the first column |
+| `tparquet_metadata` (row counts from footers) | yes | yes |
+
+Everything DuckDB's C API v1 cannot express is what the v2 build adds: the C API v1 hands a
+table function no filters and has no batch indexes or glob. Every function of the C API v2 is
+marked unstable in DuckDB 2.0.0, and DuckDB loads an extension built on it only in the exact
+version it was built for, as it does its own C++ extensions: the v2 build must be rebuilt for
+every DuckDB release. Use the v1 build where DuckDB versions vary, the v2 build to read remote
+data with filters on DuckDB 2.0.0. Both pass the same SQL test suite (`TPARQUET_DUCKDB_API`
+selects the build; tests assert each build's own behavior where they differ).
 The `duckdb` crate's arrow (`^60`) unifies with the fork's arrow 60.1.0; `make check-arrow`
 fails if a second arrow or parquet ever enters the build.
 
@@ -78,24 +102,54 @@ struct fields) repeat a name, `x` and `X`, gets the names `read_parquet` gives t
 `X_1`.
 
 **Projection pushdown.** Only the columns the query uses are read (`EXPLAIN` shows
-`Projections:`). `count(*)` reads one column, the first: DuckDB asks a C API table function,
-which has no row id, for its first column (read_parquet answers `count(*)` from the footer).
-**Filters** are applied by DuckDB after the scan: the C API does not hand table functions their
-filters, so there is no row-group skipping on statistics.
+`Projections:`). `count(*)` reads one column, the first: DuckDB asks a C API table function
+(v1 or v2), which can declare neither a row id nor an empty projection, for its first column,
+and it has no way to hand DuckDB row-group statistics (read_parquet answers `count(*)` from the
+footer). For a count without decoding anything, sum the footers' row counts:
+`SELECT sum(row_group_num_rows) FROM tparquet_metadata('trades/*.parquet')`.
+
+**Filter pushdown (v2 build).** DuckDB offers a C API v2 table function the filters of the
+query; read_tparquet reads comparisons with constants (`=`, `<>`, `<`, `<=`, `>`, `>=`, `IN`,
+`BETWEEN`, either operand order), `IS [NOT] NULL`, `AND` and `OR` of them, and skips every row
+group whose statistics rule them out: signed and unsigned integers, `FLOAT`/`DOUBLE` (NaN is
+greater than every number in DuckDB, so `>`, `>=` and `<>` skip only where the NaN count is
+known to be zero), `VARCHAR` (byte order), `DATE`, `TIMESTAMP_MS`, `TIMESTAMP`, `TIMESTAMP_NS`,
+`TIMESTAMPTZ` stored in the column's own unit, and `DECIMAL` of the column's scale. A column
+that a file lacks (`union_by_name`) is NULL there. The filters are not taken over: DuckDB still
+applies each one to the rows, so skipping can only save reading, never change a result. A
+filter on a cast column (`ts_ms >= TIMESTAMP '...'` compares `CAST(ts_ms AS TIMESTAMP)`) or on
+an expression is not read. The v1 build gets no filters: DuckDB applies them after the scan.
 
 **Parallelism.** The scan's unit of work is a row group. DuckDB's threads take row groups from
 a shared queue that walks the files in order (opening each footer once); `max_threads` is the
 number of row groups bind can see (row groups of the first file times the number of files).
-With one thread rows come in file order; with several, row groups interleave, because C API
-table functions cannot report batch indexes for DuckDB to restore the order: use
-`ORDER BY filename, file_row_number` when order matters.
+Rows come in file order with any number of threads in both builds. The v2 build reports each
+row group as a batch (its index in file order), so DuckDB reads in parallel and puts the rows
+back in order for query results, `INSERT` and `COPY`. The v1 build cannot report batches, so
+DuckDB keeps the order by running such pipelines on one thread (aggregations and joins still
+run in parallel); with `SET preserve_insertion_order = false` it runs them in parallel without
+order.
 
 **Memory.** Each thread holds one row-group reader and decodes one batch of at most one DuckDB
 vector (2048 rows) at a time; pages are read as needed. Reading 400 MB of values in the slow
 test keeps the process's peak RSS where it was before the scan (97 MB).
 
-**Files.** Local files only (`std::fs`); DuckDB's virtual file systems (`httpfs`, S3) are not
-used. A leading `~/` is the home directory, as in `COPY ... TO`.
+**Files.** Files are read through DuckDB's file system, so everything DuckDB reads works:
+local files, `httpfs` (`https://`, `s3://`, ... with DuckDB's settings and secrets) and file
+systems registered with DuckDB (fsspec from Python). Column chunks are read with ranged reads.
+Globs over local paths work in both builds; globs over remote paths need DuckDB's glob, which
+only the C API v2 has (the v1 build refuses them and names the pattern: list the files). A
+leading `~/` is the home directory, as in `COPY ... TO`.
+
+## Footers: `tparquet_metadata(path)`
+
+One row per row group of the files (a file, a glob or a list, as for read_tparquet), read from
+the footers only: `file_name`, `row_group_id`, `row_group_num_rows`, `row_group_num_columns`,
+`row_group_bytes` (uncompressed) and `row_group_compressed_bytes`.
+
+```sql
+SELECT sum(row_group_num_rows) FROM tparquet_metadata('trades/*.parquet');   -- the row count
+```
 
 ### Types
 
@@ -214,13 +268,46 @@ COMPRESSION_LEVEL 9)` at 7,894,952 bytes, and the file reads back bit for bit.
 writes. With ABI `C_STRUCT` DuckDB checks the C API version, not the DuckDB version, so the file
 loads in any DuckDB that serves C API v1.5.6 or later v1.x. The entrypoint is
 `tparquet_init_c_api`, so the file must be named `tparquet.duckdb_extension`.
+`package-extension --api v2` writes the footer of the C API v2 build instead: ABI
+`C_STRUCT_UNSTABLE` and DuckDB version `v2.0.0`, for which DuckDB calls
+`tparquet_init_c_api_v2` and refuses any other DuckDB version.
+
+## Signing
+
+```sh
+openssl genrsa -out private.pem 2048 && openssl rsa -in private.pem -pubout -out public.pem
+make build sign KEY=private.pem      # signs build/tparquet.duckdb_extension and build/v2/...
+```
+
+`sign.sh` asks `package-extension signing-hash` for the digest DuckDB checks
+(`ExtensionHelper::CheckExtensionSignature`: the SHA-256 of the SHA-256s of the file's 1 MiB
+chunks, without the 256-byte signature), signs it with `openssl pkeyutl -pkeyopt digest:sha256`
+(RSA 2048, PKCS#1 v1.5) and puts the signature in the footer (`package-extension
+set-signature`). DuckDB 2.0 trusts the public key of an extension repository, so a signed build
+loads without `allow_unsigned_extensions` when it is installed from a repository that names
+the key. A repository is a directory or URL laid out as
+`<prefix>/v2.0.0/<platform>/tparquet.duckdb_extension`:
+
+```sql
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY tparquet WITH PREFIX 'https://example.com/ext'
+    USING PUBLIC KEY '-----BEGIN PUBLIC KEY-----...-----END PUBLIC KEY-----';
+INSTALL tparquet FROM tparquet;
+LOAD tparquet FROM tparquet;
+```
+
+A plain `LOAD 'file'` (or a load without `FROM`) checks only DuckDB's own core and community
+keys, so it still needs `allow_unsigned_extensions` for a file signed with another key.
+`tests/test_signing.py` signs each build with a new key, installs and loads it from a local
+repository with unsigned extensions disallowed, and checks that a tampered file, a file signed
+with another key and an unsigned file are refused.
 
 ## Tests
 
 ```sh
 uv sync --python 3.14          # duckdb/.venv: duckdb 2.0.0, pyarrow, pytest (uv.lock pins hashes)
-make test                      # unit tests, then every SQL test on the extension cargo built
-make sql                       # the SQL tests on the release build
+make test                      # unit tests, then every SQL test on both builds cargo made
+make sql                       # the SQL tests on both release builds
 make thorough                  # the same with many more generated cases (minutes)
 make mutation                  # cargo mutants on this crate
 ```
@@ -228,8 +315,9 @@ make mutation                  # cargo mutants on this crate
 - Unit tests (`src/*.rs`): the type mapping both ways, array normalization, path expansion,
   bind and projection slots, the row-group queue (also across threads), COPY options, the
   writer, DuckDB vector layouts converted to Arrow (on vectors laid out in memory), the footer.
-- `tests/sql.rs` packages the library this build produced and runs pytest on it, so `cargo
-  test`, and every mutant, checks what DuckDB actually loads. It also builds the
+- `tests/sql.rs` packages the library this build produced as both builds and runs pytest on
+  each (`TPARQUET_DUCKDB_API=v1`/`v2`), so `cargo test`, and every mutant, checks what DuckDB
+  actually loads. It also builds the
   `tparquet` CLI the tests transcode and `verify` with.
 - `tests/test_conformance.py`: every `testdata/files/*.parquet` read with
   `read_tparquet`, fetched from DuckDB as Arrow and turned into canonical JSON
@@ -244,6 +332,19 @@ make mutation                  # cargo mutants on this crate
   `$HYPOTHESIS_PROFILE`: `default`, `thorough` (`make thorough`) or `mutation` (few fixed
   examples, set by `make mutation`).
 - `tests/test_hostile.py`: damaged and truncated files give errors that name them.
+- `tests/test_pushdown.py`: a damaged row group shows whether it is read: the v2 build skips it
+  for every filter its statistics rule out (each type whose statistics are read), the v1 build
+  reads it; results equal read_parquet's, also for generated float filters with NaN, infinities
+  and signed zeros; threads keep the file order.
+- `tests/test_remote.py`: files of a registered fsspec file system (`memory://`) and over HTTP
+  through httpfs (a local server with range requests): single files, lists, globs (v2), COPY
+  FROM, errors naming the file. The HTTP tests skip only when httpfs cannot be installed.
+- `tests/test_metadata.py`: tparquet_metadata reads footers only (it works on a file whose
+  column data is damaged), in file order, also re-executed as a prepared statement.
+- `tests/test_signing.py`: see [Signing](#signing).
+- Unit tests of the shared parts: `src/prune.rs` (predicates against statistics, with a check
+  of 20,000 random row groups that a row group with a matching row is never skipped, and the
+  statistics of every type a file holds), `src/fs.rs` (file inputs), `src/footer.rs`.
 - `tests/test_read.py`, `tests/test_write.py`, `tests/test_load.py`, `tests/test_acceptance.py`,
   and the sqllogictest-style `tests/sql/*.test` (run by `tests/test_sqllogic.py`, as DuckDB's
   C++ runner does not come with the Python package; `__TESTDATA__`, `__TEST_DIR__` and
@@ -267,12 +368,10 @@ The extension is not submitted anywhere. Notes for doing so:
   `package-extension` (and signs it). The workspace's path dependencies (`rust/parquet`,
   `rust/tparquet`) must build from that checkout; the tests here use Python and need a
   `test` target that the community CI can run, or none.
-- **Signing.** DuckDB loads a signed extension without `allow_unsigned_extensions` only if the
-  signature verifies against one of its built-in keys (core or community); there is no way to
-  sign with one's own key for a plain `LOAD`. Signing happens in the community CI. Until then,
-  users load the unsigned build with `allow_unsigned_extensions` (or `duckdb -unsigned`), or
-  install it from a custom repository (`INSTALL tparquet FROM 'https://...'`), which
-  also needs that setting for unsigned files.
+- **Signing.** Either with one's own key, through an extension repository that names it
+  ([Signing](#signing)), or by the community CI with DuckDB's community key, which a plain
+  `LOAD` trusts. Unsigned builds load with `allow_unsigned_extensions` (or `duckdb -unsigned`).
+  The community CI builds C API v1 extensions; the v2 build is for DuckDB 2.0.0 only.
 - **Versions.** The footer's C API version `v1.5.6` lets the same build load in later DuckDB
   releases that still serve C API v1, on the same platform (one build per platform: `linux_amd64`,
   `linux_arm64`, `osx_amd64`, `osx_arm64`, `windows_amd64`).

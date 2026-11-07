@@ -68,6 +68,13 @@ FILES = TESTDATA / "files"
 EXPECTED = TESTDATA / "expected"
 
 
+# Which build of the extension the tests load: "v1" (DuckDB's stable C API v1.5.6, any DuckDB
+# that serves it) or "v2" (the unstable C API v2, exactly DuckDB 2.0.0). Tests of what only v2
+# can do assert v1's documented behavior instead.
+API = os.environ.get("TPARQUET_DUCKDB_API", "v1")
+assert API in ("v1", "v2"), API
+
+
 def extension_path() -> str:
     path = os.environ.get("TPARQUET_DUCKDB_EXTENSION")
     if not path:
