@@ -21,8 +21,12 @@ import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** The tparquet data source writes PCODEC files that Spark (and its parquet source) reads back. */
 class SparkWritesTest {
@@ -83,7 +87,8 @@ class SparkWritesTest {
   @Test
   void numericColumnsAreEncodedForTheirType() throws IOException {
     Path out = dir.resolve("t");
-    trades(50_000).coalesce(1).write().format("tparquet").save(out.toString());
+    // INT64 timestamps (Spark's default INT96 is not PCODEC's: int64TimestampsArePcodecAndInt96IsTheZstdFallback)
+    trades(50_000).coalesce(1).write().format("tparquet").option("outputTimestampType", "TIMESTAMP_MICROS").save(out.toString());
     Map<String, List<String>> modes = Inspect.modes(parquetFiles(out).get(0));
     assertThat(modes.get("id")).as(modes.toString()).containsOnly("DATA_PAGE_V2:PCO");
     assertThat(modes.get("ts")).containsOnly("DATA_PAGE_V2:PCO");
@@ -95,19 +100,108 @@ class SparkWritesTest {
     assertThat(modes.get("levels.list.element")).containsOnly("DATA_PAGE_V2:PCO");
   }
 
+  /** The session's settings the timestamp tests change: the session is shared by every test. */
+  @AfterEach
+  void resetTimestampConf() {
+    Spark.session().conf().unset(OUTPUT_TIMESTAMP_TYPE);
+    Spark.session().conf().unset(INT96_REBASE_MODE);
+  }
+
+  static final String OUTPUT_TIMESTAMP_TYPE = "spark.sql.parquet.outputTimestampType";
+  static final String INT96_REBASE_MODE = "spark.sql.parquet.int96RebaseModeInWrite";
+
+  /** The physical type and logical annotation of the {@code ts} column of the one file in {@code out}. */
+  static String timestampType(Path out) throws IOException {
+    var ts = footer(parquetFiles(out).get(0)).getFileMetaData().getSchema().getType("ts").asPrimitiveType();
+    return ts.getPrimitiveTypeName() + " " + ts.getLogicalTypeAnnotation();
+  }
+
+  /**
+   * Writes {@code df} with Spark's Parquet source and with tparquet (with {@code options}): the
+   * timestamp column has the same type in both, and both read back as {@code df}. Returns the type.
+   */
+  String sameTimestampsAsSparksParquet(Dataset<Row> df, Map<String, String> options) throws IOException {
+    Path parquet = Files.createTempDirectory(dir, "parquet").resolve("t");
+    Path tparquet = Files.createTempDirectory(dir, "tparquet").resolve("t");
+    df.coalesce(1).write().parquet(parquet.toString());
+    df.coalesce(1).write().format("tparquet").options(options).save(tparquet.toString());
+    assertThat(timestampType(tparquet)).isEqualTo(timestampType(parquet));
+    List<String> want = Spark.rows(Spark.session().read().parquet(parquet.toString()).orderBy("id"));
+    assertThat(Spark.rows(Spark.session().read().parquet(tparquet.toString()).orderBy("id"))).isEqualTo(want);
+    return timestampType(tparquet);
+  }
+
+  /** With Spark's defaults, tparquet writes Spark's default timestamp type: INT96 (Spark 4.3's SQLConf). */
   @Test
-  void timestampsAreInt64UnlessAskedOtherwise() throws IOException {
-    Path micros = dir.resolve("micros");
-    trades(1000).coalesce(1).write().format("tparquet").save(micros.toString());
-    Path int96 = dir.resolve("int96");
-    trades(1000).coalesce(1).write().format("tparquet").option("outputTimestampType", "INT96").save(int96.toString());
-    var ts = footer(parquetFiles(micros).get(0)).getFileMetaData().getSchema().getType("ts").asPrimitiveType();
-    assertThat(ts.getPrimitiveTypeName().name()).isEqualTo("INT64");
-    assertThat(ts.getLogicalTypeAnnotation()).hasToString("TIMESTAMP(MICROS,true)");
-    assertThat(footer(parquetFiles(int96).get(0)).getFileMetaData().getSchema().getType("ts").asPrimitiveType()
-        .getPrimitiveTypeName().name()).isEqualTo("INT96");
-    assertThat(Spark.rows(Spark.session().read().parquet(micros.toString()).orderBy("id")))
-        .isEqualTo(Spark.rows(Spark.session().read().parquet(int96.toString()).orderBy("id")));
+  void timestampsAreSparksDefaultInt96() throws IOException {
+    assertThat(sameTimestampsAsSparksParquet(trades(1000), Map.of())).isEqualTo("INT96 null");
+  }
+
+  /** The session's spark.sql.parquet.outputTimestampType is honored, as Spark's Parquet source honors it. */
+  @ParameterizedTest
+  @CsvSource({
+    "INT96, INT96 null",
+    "TIMESTAMP_MICROS, 'INT64 TIMESTAMP(MICROS,true)'",
+    "TIMESTAMP_MILLIS, 'INT64 TIMESTAMP(MILLIS,true)'"})
+  void timestampsFollowTheSessionConf(String conf, String type) throws IOException {
+    Spark.session().conf().set(OUTPUT_TIMESTAMP_TYPE, conf);
+    assertThat(sameTimestampsAsSparksParquet(trades(1000), Map.of())).isEqualTo(type);
+  }
+
+  /** The outputTimestampType option overrides the session's setting, in either direction. */
+  @ParameterizedTest
+  @CsvSource({
+    "TIMESTAMP_MILLIS, TIMESTAMP_MICROS, 'INT64 TIMESTAMP(MICROS,true)'",
+    "TIMESTAMP_MICROS, INT96, INT96 null",
+    "INT96, TIMESTAMP_MILLIS, 'INT64 TIMESTAMP(MILLIS,true)'"})
+  void theOutputTimestampTypeOptionOverridesTheSessionConf(String conf, String option, String type) throws IOException {
+    Spark.session().conf().set(OUTPUT_TIMESTAMP_TYPE, conf);
+    Path out = dir.resolve("t");
+    Dataset<Row> df = trades(1000);
+    df.coalesce(1).write().format("tparquet").option("outputTimestampType", option).save(out.toString());
+    assertThat(timestampType(out)).isEqualTo(type);
+    assertThat(Spark.rows(Spark.session().read().parquet(out.toString()).orderBy("id"))).isEqualTo(Spark.rows(df.orderBy("id")));
+    // and it is what Spark's Parquet source writes with that session setting
+    Spark.session().conf().set(OUTPUT_TIMESTAMP_TYPE, option);
+    assertThat(sameTimestampsAsSparksParquet(df, Map.of())).isEqualTo(type);
+  }
+
+  /** INT64 timestamps are PCODEC's own; INT96, which PCODEC does not model, is the payload's ZSTD fallback. */
+  @Test
+  void int64TimestampsArePcodecAndInt96IsTheZstdFallback() throws IOException {
+    Dataset<Row> df = trades(50_000).coalesce(1);
+    df.write().format("tparquet").option("outputTimestampType", "TIMESTAMP_MICROS").save(dir.resolve("micros").toString());
+    df.write().format("tparquet").save(dir.resolve("int96").toString());
+    assertThat(Inspect.modes(parquetFiles(dir.resolve("micros")).get(0)).get("ts")).containsOnly("DATA_PAGE_V2:PCO");
+    assertThat(Inspect.modes(parquetFiles(dir.resolve("int96")).get(0)).get("ts")).isNotEmpty()
+        .allMatch(m -> m.endsWith(":ZSTD") || m.endsWith(":RAW")).anyMatch(m -> m.endsWith(":ZSTD"));
+  }
+
+  /**
+   * Timestamps before the Gregorian switch (1582) and before 1900 go through Spark's INT96 rebase
+   * as in Spark's own writer: the same files' rows and the same legacy-INT96 marker in the footer.
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"CORRECTED", "LEGACY"})
+  void ancientInt96TimestampsAreRebasedAsSparkDoes(String mode) throws IOException {
+    Spark.session().conf().set(INT96_REBASE_MODE, mode);
+    Dataset<Row> df = Spark.session().sql("SELECT * FROM VALUES "
+        + "(0, timestamp'0001-01-01 00:00:00'), (1, timestamp'1000-03-01 12:34:56.789012'), "
+        + "(2, timestamp'1582-10-04 23:59:59.999999'), (3, timestamp'1582-10-15 00:00:00'), "
+        + "(4, timestamp'1899-12-31 23:59:59.999999'), (5, timestamp'1900-01-01 00:00:00'), "
+        + "(6, timestamp'2025-01-01 00:00:00.000001'), (7, null) AS t(id, ts)");
+    Path parquet = dir.resolve("parquet");
+    Path tparquet = dir.resolve("tparquet");
+    df.coalesce(1).write().parquet(parquet.toString());
+    df.coalesce(1).write().format("tparquet").save(tparquet.toString());
+    assertThat(timestampType(tparquet)).isEqualTo("INT96 null").isEqualTo(timestampType(parquet));
+    String legacy = "org.apache.spark.legacyINT96";
+    assertThat(footer(parquetFiles(tparquet).get(0)).getFileMetaData().getKeyValueMetaData().containsKey(legacy))
+        .isEqualTo(mode.equals("LEGACY"))
+        .isEqualTo(footer(parquetFiles(parquet).get(0)).getFileMetaData().getKeyValueMetaData().containsKey(legacy));
+    List<String> want = Spark.rows(df.orderBy("id"));
+    assertThat(Spark.rows(Spark.session().read().parquet(parquet.toString()).orderBy("id"))).isEqualTo(want);
+    assertThat(Spark.rows(Spark.session().read().parquet(tparquet.toString()).orderBy("id"))).isEqualTo(want);
   }
 
   @Test

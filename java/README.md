@@ -72,9 +72,13 @@ spark.read.parquet("trades")                                     # or .format("t
 spark.sql("CREATE TABLE trades USING tparquet LOCATION 'trades'")
 ```
 
-Write options: `level`, `decimal`, `rowGroupSize`, `pageSize`, `outputTimestampType` (default
-`TIMESTAMP_MICROS`: Spark's Parquet source writes INT96, which PCODEC does not model).
-`compression` may only be `pcodec`.
+Write options: `level`, `decimal`, `rowGroupSize`, `pageSize`, `outputTimestampType` (`INT96`,
+`TIMESTAMP_MICROS` or `TIMESTAMP_MILLIS`). `compression` may only be `pcodec`. Timestamps are
+written as `format("parquet")` writes them: the session's `spark.sql.parquet.outputTimestampType`
+(Spark's default is INT96), with Spark's INT96 rebase (`spark.sql.parquet.int96RebaseModeInWrite`),
+unless the `outputTimestampType` option overrides it. PCODEC does not model INT96, so INT96 columns
+are the payload's ZSTD fallback; `outputTimestampType=TIMESTAMP_MICROS` (or the session setting)
+writes INT64 timestamps, which PCODEC compresses.
 
 ## Testing
 
