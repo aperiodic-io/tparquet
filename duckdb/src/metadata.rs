@@ -27,6 +27,18 @@ pub const WASM_SECTION_HEADER: &[u8] = b"\x00\x93\x04\x10duckdb_signature\x80\x0
 
 /// The ABI of an extension built on DuckDB's C extension API v1 with a stable API version.
 pub const ABI_C_STRUCT: &str = "C_STRUCT";
+/// The ABI of an extension built on DuckDB's unstable C API (v2 in DuckDB 2.0): it loads only
+/// in the DuckDB version named in the footer.
+pub const ABI_C_STRUCT_UNSTABLE: &str = "C_STRUCT_UNSTABLE";
+
+/// The C API a build of the extension is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Api {
+    /// C API v1.5.6, stable: any DuckDB that serves it.
+    V1,
+    /// C API v2, unstable in DuckDB 2.0.0: only DuckDB 2.0.0.
+    V2,
+}
 
 /// What the footer says about the extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,13 +104,22 @@ impl Metadata {
 }
 
 impl Metadata {
-    /// The metadata of this build of the extension, for `platform`.
+    /// The metadata of the C API v1 build of the extension, for `platform`.
     pub fn for_platform(platform: &str) -> Self {
+        Self::for_api(platform, Api::V1)
+    }
+
+    /// The metadata of the build of the extension for `api`, for `platform`.
+    pub fn for_api(platform: &str, api: Api) -> Self {
+        let (duckdb_version, abi_type) = match api {
+            Api::V1 => (crate::C_API_VERSION, ABI_C_STRUCT),
+            Api::V2 => (crate::v2::DUCKDB_VERSION, ABI_C_STRUCT_UNSTABLE),
+        };
         Self {
             platform: platform.to_string(),
-            duckdb_version: crate::C_API_VERSION.to_string(),
+            duckdb_version: duckdb_version.to_string(),
             extension_version: format!("v{}", env!("CARGO_PKG_VERSION")),
-            abi_type: ABI_C_STRUCT.to_string(),
+            abi_type: abi_type.to_string(),
         }
     }
 }
