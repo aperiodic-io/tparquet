@@ -74,16 +74,7 @@ unsafe fn bind_impl(info: ffi::duckdb_bind_info) -> Result<(), String> {
             })
             .collect();
         let have: Vec<SqlType> = bound.result_columns().into_iter().map(|c| c.1).collect();
-        if have != types {
-            let show = |ts: &[SqlType]| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
-            return Err(format!(
-                "the file columns ({}) do not match the table columns ({}) by position and type; \
-                 use INSERT INTO ... SELECT ... FROM {}(...) to map or cast them",
-                show(&have),
-                show(&types),
-                scan::FUNCTION
-            ));
-        }
+        scan::check_copy_from(&have, &types)?;
     } else {
         for (name, t) in bound.result_columns() {
             let lt = logical_type(&t)?;

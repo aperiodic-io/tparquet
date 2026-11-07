@@ -202,7 +202,7 @@ the base codec per numeric column on the first batch; the writer holds back the 
 
 | option | default | |
 |---|---|---|
-| `COLUMN_NAMES` | required | the column names, in order: `COLUMN_NAMES ['ts', 'price']` |
+| `COLUMN_NAMES` | required (C API v1 build) | the column names, in order: `COLUMN_NAMES ['ts', 'price']`; the C API v2 build takes the query's names unless it is given |
 | `POLICY` | `'auto'` | `'auto'`, `'pcodec'` or `'base'`, for every `INT32`/`INT64`/`FLOAT`/`DOUBLE` column |
 | `LEVEL` | 8 | pcodec level, 0 to 12 |
 | `COLUMN_POLICY` | | per column: `['price=pcodec', 'id=base']` |
@@ -218,22 +218,34 @@ The other alternatives are worse: the C API has no table in-out functions, and a
 taking a query string would run it on a second connection, which cannot see the caller's
 temporary tables or open transaction (and, holding a connection, would keep the database open
 forever). DuckDB's C API v2 has `duckdb_v2_copy_to_bind_get_column_name`, but no V2 function
-is stable yet: a V2 extension loads only in the exact DuckDB version it was built for.
+is stable yet: a V2 extension loads only in the exact DuckDB version it was built for. The C API
+v2 build (below) uses it: there `COLUMN_NAMES` is optional and only renames the columns (it is
+still checked against the number of columns).
 
 **`ROW_GROUP_ROWS`, not `ROW_GROUP_SIZE`.** DuckDB keeps `ROW_GROUP_SIZE` and
 `ROW_GROUP_SIZE_BYTES` as options of its generic COPY machinery and does not pass them on.
 
 **Partitions and per-thread files.** `PARTITION_BY` works; DuckDB hands the COPY function the
 columns without the partition columns (unless `WRITE_PARTITION_COLUMNS true`), so
-`COLUMN_NAMES` names those. The C API cannot give a COPY function its file extension, so
+`COLUMN_NAMES` names those. The C API v1 cannot give a COPY function its file extension, so
 `PARTITION_BY` and `PER_THREAD_OUTPUT` write `data_0.` unless `FILE_EXTENSION 'parquet'` is
-given. `read_tparquet` has no `hive_partitioning`: the partition values are in `filename`.
+given; the C API v2 build sets the extension `parquet` (`duckdb_v2_copy_function_set_file_extension`). `read_tparquet` has no `hive_partitioning`: the partition values are in `filename`.
 `FILE_SIZE_BYTES` is refused by DuckDB for this format. A query that fails midway leaves no
 file, and an existing file at the path is kept (DuckDB writes to a temporary file first).
 
 **Order.** The C API sets no parallel execution mode for COPY functions, so DuckDB calls the
 sink from one thread at a time, in the query's order; the conversion of DuckDB vectors to Arrow
 runs in that thread.
+
+**The C API v2 build.** `tparquet_init_c_api_v2` registers the same COPY format on DuckDB's C
+API v2 (`package-extension --api v2`; it loads only in DuckDB 2.0.0), with the same options,
+the same file and the same type rules: the batches DuckDB hands its batch callback (a column
+data collection, scanned chunk by chunk) are converted by the same code as in the C API v1
+build (`chunk::VectorView` over the C API v2 vectors). The C API v2 sets no parallel execution
+mode either, so outside `PARTITION_BY` and `PER_THREAD_OUTPUT` DuckDB cuts the batches from one
+thread in the query's order, and flushes them in that order; the writer holds back the first
+rows for `Auto` as above. `COPY ... FROM` reads with the C API v2 scan of `read_tparquet`
+(through DuckDB's Arrow importer) and checks the columns as below.
 
 **Types.** Every type of the reading table can be written except `INTERVAL`; in addition
 `ENUM` is written as strings, `TIMESTAMP_S` as milliseconds (Parquet has no seconds unit),
@@ -244,7 +256,8 @@ with `key_value`, so the file reads the same with and without its Arrow schema. 
 
 `COPY t FROM 'f.parquet' (FORMAT tparquet)` reads with `read_tparquet`; the file's
 columns must match the table's by position and type (use `INSERT INTO t SELECT ... FROM
-read_tparquet(...)` to map or cast).
+read_tparquet(...)` to map or cast). Its options are the flags of `read_tparquet`
+(`FILENAME`, `FILE_ROW_NUMBER`, `UNION_BY_NAME`).
 
 One more finding: DuckDB's built-in Parquet writer does not keep NaN payloads (the conformance
 vector's `0x7ff0000000000001` comes out as `0xfff8000000000000`); `tparquet` keeps them.

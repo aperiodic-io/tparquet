@@ -52,6 +52,14 @@ pub unsafe fn report(slot: *mut s::duckdb_v2_error_info_handle, code: Code, mess
     }
 }
 
+/// Runs a callback body: catches panics, reports errors through DuckDB's error slot, each
+/// message after `prefix` (`read_tparquet: `, `COPY (FORMAT tparquet): `).
+pub fn run(err: *mut s::duckdb_v2_error_info_handle, code: Code, prefix: &str, f: impl FnOnce() -> Result<(), String>) {
+    if let Err(e) = crate::ffi::guard(f) {
+        unsafe { report(err, code, &format!("{prefix}{e}")) };
+    }
+}
+
 /// A borrowed view of `text` (valid while `text` lives).
 pub fn as_str(text: &str) -> s::duckdb_v2_str {
     s::duckdb_v2_str { ptr: text.as_ptr().cast(), len: text.len() as u64 }
@@ -107,6 +115,66 @@ impl Type {
         Ok(id)
     }
 
+    /// The name of the type (`INTEGER`, `TIME WITH TIME ZONE`, an alias such as `POINT_2D`).
+    pub fn name(&self) -> Result<String, String> {
+        let mut v = s::duckdb_v2_str { ptr: std::ptr::null(), len: 0 };
+        call!(duckdb_v2_logical_type_get_name(self.0, &mut v))?;
+        Ok(unsafe { from_str(&v) })
+    }
+
+    /// The parameters of the type, each with its name (empty for a positional one): the width and
+    /// scale of a DECIMAL, the child types of a LIST, ARRAY, MAP or STRUCT, the entries of an ENUM.
+    pub fn params(&self) -> Result<Vec<(String, Value)>, String> {
+        let mut n = 0u64;
+        call!(duckdb_v2_logical_type_get_param_count(self.0, &mut n))?;
+        (0..n)
+            .map(|i| {
+                let mut name = s::duckdb_v2_str { ptr: std::ptr::null(), len: 0 };
+                let mut v = Value(std::ptr::null_mut());
+                call!(duckdb_v2_logical_type_get_param(self.0, i, &mut name, &mut v.0))?;
+                Ok((unsafe { from_str(&name) }, v))
+            })
+            .collect()
+    }
+
+    /// The [`SqlType`] of the type: what the extension can write or compare, and the name of
+    /// any other type.
+    pub fn sql_type(&self) -> Result<SqlType, String> {
+        use s::DUCKDB_V2_LOGICAL_TYPE_ID as Id;
+        let id = self.id()?;
+        if let Some(t) = plain_type(id) {
+            return Ok(t);
+        }
+        let params = self.params()?;
+        let int = |i: usize| match params.get(i).map(|p| p.1.val()).transpose()? {
+            Some(Val::Int(v)) => Ok(v),
+            other => Err(format!("parameter {i} of {} is {other:?}, not an integer", self.name()?)),
+        };
+        let child = |i: usize| match params.get(i) {
+            Some((_, v)) => v.type_value()?.sql_type(),
+            None => Err(format!("{} has no parameter {i}", self.name()?)),
+        };
+        let byte = |i: usize| u8::try_from(int(i)?).map_err(|e| e.to_string());
+        Ok(match id {
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_DECIMAL => SqlType::Decimal { width: byte(0)?, scale: byte(1)? },
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_ENUM => {
+                SqlType::Enum(params.iter().map(|(_, v)| v.varchar()).collect::<Result<_, _>>()?)
+            }
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_LIST => SqlType::List(Box::new(child(0)?)),
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_ARRAY => {
+                SqlType::Array(Box::new(child(0)?), usize::try_from(int(1)?).map_err(|e| e.to_string())?)
+            }
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_MAP => SqlType::Map(Box::new(child(0)?), Box::new(child(1)?)),
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_STRUCT => SqlType::Struct(
+                params
+                    .iter()
+                    .map(|(n, v)| Ok((n.clone(), v.type_value()?.sql_type()?)))
+                    .collect::<Result<_, String>>()?,
+            ),
+            _ => SqlType::Unsupported(self.name()?),
+        })
+    }
+
     /// The type as DuckDB writes it (`DECIMAL(18,3)`, `STRUCT(a INTEGER)`...).
     pub fn text(&self) -> Result<String, String> {
         let mut len = 0u64;
@@ -116,6 +184,37 @@ impl Type {
         buf.truncate(len as usize);
         Ok(String::from_utf8_lossy(&buf).into_owned())
     }
+}
+
+/// The [`SqlType`] of a type id that takes no parameters, if the extension models it.
+pub fn plain_type(id: s::DUCKDB_V2_LOGICAL_TYPE_ID) -> Option<SqlType> {
+    use s::DUCKDB_V2_LOGICAL_TYPE_ID as Id;
+    Some(match id {
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN => SqlType::Boolean,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT => SqlType::TinyInt,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT => SqlType::SmallInt,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER => SqlType::Integer,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT => SqlType::BigInt,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT => SqlType::UTinyInt,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT => SqlType::USmallInt,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER => SqlType::UInteger,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT => SqlType::UBigInt,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT => SqlType::Float,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE => SqlType::Double,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR => SqlType::Varchar,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_BLOB => SqlType::Blob,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_DATE => SqlType::Date,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIME => SqlType::Time,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS => SqlType::TimeNs,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC => SqlType::TimestampS,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS => SqlType::TimestampMs,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP => SqlType::Timestamp,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS => SqlType::TimestampNs,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ => SqlType::TimestampTz,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS => SqlType::TimestampTzNs,
+        Id::DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL => SqlType::Interval,
+        _ => return None,
+    })
 }
 
 /// The factory of a callback's context.
@@ -152,6 +251,13 @@ impl Value {
         Ok(t)
     }
 
+    /// The logical type a TYPE value carries.
+    pub fn type_value(&self) -> Result<Type, String> {
+        let mut t = Type(std::ptr::null_mut());
+        call!(duckdb_v2_value_get_type(self.0, &mut t.0))?;
+        Ok(t)
+    }
+
     pub fn is_null(&self) -> Result<bool, String> {
         let mut null = false;
         call!(duckdb_v2_value_is_null(self.0, &mut null))?;
@@ -162,6 +268,17 @@ impl Value {
         let mut v = s::duckdb_v2_str { ptr: std::ptr::null(), len: 0 };
         call!(duckdb_v2_value_get_varchar(self.0, &mut v))?;
         Ok(unsafe { from_str(&v) })
+    }
+
+    /// The value as DuckDB renders it (`5.5` for a DECIMAL): `duckdb_v2_value_get_varchar` reads
+    /// VARCHAR values only.
+    pub fn text(&self) -> Result<String, String> {
+        let mut len = 0u64;
+        call!(duckdb_v2_value_to_string(self.0, std::ptr::null_mut(), 0, &mut len))?;
+        let mut buf = vec![0u8; len as usize + 1];
+        call!(duckdb_v2_value_to_string(self.0, buf.as_mut_ptr().cast(), buf.len() as u64, &mut len))?;
+        buf.truncate(len as usize);
+        Ok(String::from_utf8_lossy(&buf).into_owned())
     }
 
     pub fn blob(&self) -> Result<Vec<u8>, String> {
@@ -216,8 +333,55 @@ impl Value {
             | Id::DUCKDB_V2_LOGICAL_TYPE_ID_STRUCT => {
                 Val::List(self.children()?.iter().map(Value::val).collect::<Result<_, _>>()?)
             }
-            // as the C API v1 build reads them: any other value by its text
-            _ => Val::Str(self.varchar()?),
+            // as the C API v1 build reads them: any other value by its text (`LEVEL 5.5`)
+            _ => Val::Str(self.text()?),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use s::DUCKDB_V2_LOGICAL_TYPE_ID as Id;
+
+    #[test]
+    fn type_ids_without_parameters_are_plain_types() {
+        let cases = [
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_BOOLEAN, SqlType::Boolean),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TINYINT, SqlType::TinyInt),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_SMALLINT, SqlType::SmallInt),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_INTEGER, SqlType::Integer),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_BIGINT, SqlType::BigInt),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_UTINYINT, SqlType::UTinyInt),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_USMALLINT, SqlType::USmallInt),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_UINTEGER, SqlType::UInteger),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_UBIGINT, SqlType::UBigInt),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_FLOAT, SqlType::Float),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_DOUBLE, SqlType::Double),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR, SqlType::Varchar),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_BLOB, SqlType::Blob),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_DATE, SqlType::Date),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIME, SqlType::Time),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIME_NS, SqlType::TimeNs),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_SEC, SqlType::TimestampS),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_MS, SqlType::TimestampMs),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP, SqlType::Timestamp),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_NS, SqlType::TimestampNs),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ, SqlType::TimestampTz),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIMESTAMP_TZ_NS, SqlType::TimestampTzNs),
+            (Id::DUCKDB_V2_LOGICAL_TYPE_ID_INTERVAL, SqlType::Interval),
+        ];
+        for (id, t) in cases {
+            assert_eq!(plain_type(id), Some(t), "{id:?}");
+        }
+        for id in [
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_DECIMAL,
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_LIST,
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_HUGEINT,
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_TIME_TZ,
+            Id::DUCKDB_V2_LOGICAL_TYPE_ID_SQLNULL,
+        ] {
+            assert_eq!(plain_type(id), None, "{id:?}");
+        }
     }
 }

@@ -15,6 +15,7 @@ pub mod filter;
 pub mod metadata;
 pub mod read;
 pub mod sys;
+pub mod vector;
 
 use libduckdb_sys::v2 as s;
 use sys::{Code, report};

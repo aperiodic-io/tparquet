@@ -51,7 +51,7 @@ unsafe fn bind_impl(info: ffi::duckdb_copy_function_bind_info) -> Result<(), Str
         })
         .collect();
     let options = unsafe { owned_struct(ffi::duckdb_copy_function_bind_get_options(info)) };
-    let options = CopyOptions::parse(types, &options)?;
+    let options = CopyOptions::parse(types, None, &options)?;
     unsafe { ffi::duckdb_copy_function_bind_set_bind_data(info, into_raw(options), Some(drop_box::<CopyOptions>)) };
     Ok(())
 }

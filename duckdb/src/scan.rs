@@ -29,6 +29,21 @@ pub const FILENAME: &str = "filename";
 /// Name of the column `file_row_number := true` adds.
 pub const FILE_ROW_NUMBER: &str = "file_row_number";
 
+/// Checks that the bound columns (`have`) are the columns of the table a `COPY ... FROM` fills
+/// (`table`), by position and type.
+pub fn check_copy_from(have: &[SqlType], table: &[SqlType]) -> Result<(), String> {
+    if have == table {
+        return Ok(());
+    }
+    let show = |ts: &[SqlType]| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+    Err(format!(
+        "the file columns ({}) do not match the table columns ({}) by position and type; \
+         use INSERT INTO ... SELECT ... FROM {FUNCTION}(...) to map or cast them",
+        show(have),
+        show(table),
+    ))
+}
+
 /// The named parameters of `read_tparquet`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReadOptions {
@@ -1058,5 +1073,17 @@ mod tests {
         // skipped row groups keep their index, so indices stay those of the file order
         let scan = Scan::new(bound, &slots, 100).with_predicates(vec![id_cmp(Op::Ge, 35)]);
         assert_eq!(all_rows(&scan).iter().map(|b| b.batch).collect::<Vec<_>>(), vec![4, 5]);
+    }
+
+    #[test]
+    fn copy_from_needs_the_table_columns_by_position_and_type() {
+        let two = [SqlType::BigInt, SqlType::Varchar];
+        assert_eq!(check_copy_from(&two, &two), Ok(()));
+        assert_eq!(
+            check_copy_from(&two, &[SqlType::Varchar, SqlType::BigInt]).unwrap_err(),
+            "the file columns (BIGINT, VARCHAR) do not match the table columns (VARCHAR, BIGINT) by position and \
+             type; use INSERT INTO ... SELECT ... FROM read_tparquet(...) to map or cast them"
+        );
+        assert!(check_copy_from(&two, &two[..1]).is_err());
     }
 }

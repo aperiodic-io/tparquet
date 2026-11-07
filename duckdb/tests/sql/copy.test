@@ -29,10 +29,29 @@ SELECT count(*) FROM again
 ----
 10000
 
+# the C API v1 gives a COPY function the types of the columns, not their names
+onlyif v1
 statement error
 COPY trades TO '__TEST_DIR__/x.parquet' (FORMAT tparquet)
 ----
 needs COLUMN_NAMES
+
+# the C API v2 gives both
+onlyif v2
+statement ok
+COPY trades TO '__TEST_DIR__/named.parquet' (FORMAT tparquet)
+
+onlyif v2
+query I
+SELECT count(*) FROM (SELECT * FROM trades EXCEPT ALL SELECT * FROM read_tparquet('__TEST_DIR__/named.parquet'))
+----
+0
+
+onlyif v2
+query T
+SELECT string_agg(column_name, ',') FROM (DESCRIBE SELECT * FROM read_tparquet('__TEST_DIR__/named.parquet'))
+----
+id,ts,price,sym
 
 statement error
 COPY trades TO '__TEST_DIR__/x.parquet' (FORMAT tparquet, COLUMN_NAMES ['a', 'b', 'c', 'd'], POLICY 'quick')

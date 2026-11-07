@@ -13,7 +13,7 @@ use crate::ffi::Val;
 use crate::prune::Predicate;
 use crate::scan::{self, Bound, Local, ReadOptions, Scan, ScanBatch, Slot};
 use crate::v2::filter::{self, Columns};
-use crate::v2::sys::{self, Code, as_str, factory, logical_type, opaque, report, type_from_id};
+use crate::v2::sys::{self, Code, as_str, factory, logical_type, opaque, type_from_id};
 use crate::vfs2::{DuckFs, with_context};
 use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
@@ -36,10 +36,17 @@ struct GlobalState {
 
 #[derive(Default)]
 struct LocalState {
-    local: Local,
-    importer: Option<Importer>,
+    reader: Reader,
     /// The batch index of the rows last produced.
     batch: u64,
+}
+
+/// One thread's reading of a [`Scan`] into DuckDB's output chunks, through DuckDB's Arrow
+/// importer (`read_tparquet` and `COPY ... FROM`).
+#[derive(Default)]
+pub struct Reader {
+    local: Local,
+    importer: Option<Importer>,
 }
 
 /// DuckDB's Arrow importer of one thread of a scan (created on its first batch).
@@ -110,10 +117,8 @@ fn bind_impl(
 }
 
 /// Runs a callback body: catches panics, reports errors through DuckDB's error slot.
-fn run(err: *mut s::duckdb_v2_error_info_handle, code: Code, f: impl FnOnce() -> Result<(), String>) {
-    if let Err(e) = crate::ffi::guard(f) {
-        unsafe { report(err, code, &format!("{}: {e}", scan::FUNCTION)) };
-    }
+pub fn run(err: *mut s::duckdb_v2_error_info_handle, code: Code, f: impl FnOnce() -> Result<(), String>) {
+    sys::run(err, code, &format!("{}: ", scan::FUNCTION), f)
 }
 
 unsafe extern "C" fn bind(
@@ -235,6 +240,32 @@ fn plain(t: &DataType) -> DataType {
     }
 }
 
+impl Reader {
+    /// Writes the next batch of `scan` (at most one vector of rows, the columns of `slots`) to
+    /// `output`, and returns its batch index; `None`, with an empty `output`, at the end.
+    pub fn next(
+        &mut self,
+        scan: &Scan,
+        slots: &[Slot],
+        output: s::duckdb_v2_data_chunk_handle,
+        context: s::duckdb_v2_context_handle,
+    ) -> Result<Option<u64>, String> {
+        let mut first: s::duckdb_v2_vector_handle = std::ptr::null_mut();
+        call!(duckdb_v2_data_chunk_get_vector(output, 0, &mut first))?;
+        let Some(batch) = scan.next(&mut self.local)? else {
+            call!(duckdb_v2_vector_set_size(first, 0))?;
+            return Ok(None);
+        };
+        let columns = arrays(&batch, slots);
+        if !columns.is_empty() {
+            import(context, &mut self.importer, output, columns)
+                .map_err(|e| format!("cannot read {}: {e}", batch.file.path))?;
+        }
+        call!(duckdb_v2_vector_set_size(first, batch.num_rows as u64))?;
+        Ok(Some(batch.batch))
+    }
+}
+
 fn exec_impl(
     info: s::duckdb_v2_table_function_exec_info_handle,
     context: s::duckdb_v2_context_handle,
@@ -246,18 +277,10 @@ fn exec_impl(
     let local = unsafe { &mut *(p as *mut LocalState) };
     let mut output: s::duckdb_v2_data_chunk_handle = std::ptr::null_mut();
     call!(duckdb_v2_table_function_exec_get_output_chunk(info, &mut output))?;
-    let mut first: s::duckdb_v2_vector_handle = std::ptr::null_mut();
-    call!(duckdb_v2_data_chunk_get_vector(output, 0, &mut first))?;
-    let Some(batch) = global.scan.next(&mut local.local)? else {
-        return call!(duckdb_v2_vector_set_size(first, 0));
-    };
-    local.batch = batch.batch;
-    let columns = arrays(&batch, &global.slots);
-    if !columns.is_empty() {
-        import(context, &mut local.importer, output, columns)
-            .map_err(|e| format!("cannot read {}: {e}", batch.file.path))?;
+    if let Some(batch) = local.reader.next(&global.scan, &global.slots, output, context)? {
+        local.batch = batch;
     }
-    call!(duckdb_v2_vector_set_size(first, batch.num_rows as u64))
+    Ok(())
 }
 
 /// Moves `columns` (of equal length, one per vector of `output`) into `output` through DuckDB's
@@ -298,7 +321,8 @@ pub fn import(
     Ok(rows)
 }
 
-struct Chunk(s::duckdb_v2_data_chunk_handle);
+/// A data chunk the extension owns, destroyed on drop.
+pub struct Chunk(pub s::duckdb_v2_data_chunk_handle);
 
 impl Drop for Chunk {
     fn drop(&mut self) {

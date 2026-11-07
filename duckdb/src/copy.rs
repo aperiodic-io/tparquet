@@ -1,7 +1,8 @@
 //! `COPY ... TO ... (FORMAT tparquet, ...)`: its options and the file it writes.
 //!
-//! DuckDB's C API (v1.5.6) hands a COPY function the column *types* but not the column *names*,
-//! so the names come from the `COLUMN_NAMES` option (see `duckdb/README.md`).
+//! DuckDB's C API v1 (v1.5.6) hands a COPY function the column *types* but not the column
+//! *names*, so there the names come from the `COLUMN_NAMES` option (see `duckdb/README.md`); the
+//! C API v2 hands over both, and `COLUMN_NAMES` only renames.
 
 use crate::ffi::Val;
 use crate::types::SqlType;
@@ -103,7 +104,13 @@ fn base_codec(name: &str, level: Option<i64>) -> Result<Compression, String> {
 
 impl CopyOptions {
     /// Parses the options of a COPY of columns of `types`. DuckDB passes option names upper-cased.
-    pub fn parse(types: Vec<SqlType>, options: &[(String, Val)]) -> Result<Self, String> {
+    /// `query_names` are the column names DuckDB gave, if any (the C API v2 does, v1 does not):
+    /// they name the columns unless `COLUMN_NAMES` does.
+    pub fn parse(
+        types: Vec<SqlType>,
+        query_names: Option<Vec<String>>,
+        options: &[(String, Val)],
+    ) -> Result<Self, String> {
         let mut names: Option<Vec<String>> = None;
         let mut writer = WriterOptions::default();
         let mut compression: Option<String> = None;
@@ -158,21 +165,25 @@ impl CopyOptions {
             writer = writer.with_base(base_codec(compression.as_deref().unwrap_or("zstd"), compression_level)?);
         }
         writer = writer.with_properties(properties.build());
-        let names = names.ok_or_else(|| {
-            format!(
-                "FORMAT {FORMAT} needs COLUMN_NAMES, e.g. COLUMN_NAMES ['a', 'b']: DuckDB's C API does not pass \
-                 column names to COPY functions"
-            )
-        })?;
+        let (label, names) = match (names, query_names) {
+            (Some(names), _) => ("COLUMN_NAMES", names),
+            (None, Some(names)) => ("the query's column names", names),
+            (None, None) => {
+                return Err(format!(
+                    "FORMAT {FORMAT} needs COLUMN_NAMES, e.g. COLUMN_NAMES ['a', 'b']: DuckDB's C API does not pass \
+                     column names to COPY functions"
+                ));
+            }
+        };
         if names.len() != types.len() {
-            return Err(format!("COLUMN_NAMES has {} names but the query has {} columns", names.len(), types.len()));
+            return Err(format!("{label} has {} names but the query has {} columns", names.len(), types.len()));
         }
         for (i, n) in names.iter().enumerate() {
             if n.is_empty() {
-                return Err(format!("COLUMN_NAMES: name {} is empty", i + 1));
+                return Err(format!("{label}: name {} is empty", i + 1));
             }
             if names[..i].contains(n) {
-                return Err(format!("COLUMN_NAMES: {n:?} appears twice"));
+                return Err(format!("{label}: {n:?} appears twice"));
             }
         }
         let fields = names
@@ -298,39 +309,62 @@ mod tests {
 
     #[test]
     fn column_names_name_the_columns() {
-        let o = CopyOptions::parse(two(), &opts(&[("COLUMN_NAMES", names(&["id", "price"]))])).unwrap();
+        let o = CopyOptions::parse(two(), None, &opts(&[("COLUMN_NAMES", names(&["id", "price"]))])).unwrap();
         assert_eq!(o.schema.field(0).name(), "id");
         assert_eq!(o.schema.field(1).data_type(), &DataType::Float64);
         assert!(o.schema.field(0).is_nullable());
         assert_eq!(o.column_types, two());
         assert_eq!(o.writer.policy, Policy::Auto);
         // one column may be named by a plain string
-        let o = CopyOptions::parse(vec![SqlType::BigInt], &opts(&[("column_names", s("x"))])).unwrap();
+        let o = CopyOptions::parse(vec![SqlType::BigInt], None, &opts(&[("column_names", s("x"))])).unwrap();
         assert_eq!(o.schema.field(0).name(), "x");
     }
 
     #[test]
     fn column_names_are_required_and_checked() {
-        let e = CopyOptions::parse(two(), &[]).unwrap_err();
+        let e = CopyOptions::parse(two(), None, &[]).unwrap_err();
         assert!(e.starts_with("FORMAT tparquet needs COLUMN_NAMES"), "{e}");
-        let e = CopyOptions::parse(two(), &opts(&[("COLUMN_NAMES", names(&["a"]))])).unwrap_err();
+        let e = CopyOptions::parse(two(), None, &opts(&[("COLUMN_NAMES", names(&["a"]))])).unwrap_err();
         assert_eq!(e, "COLUMN_NAMES has 1 names but the query has 2 columns");
-        let e = CopyOptions::parse(two(), &opts(&[("COLUMN_NAMES", names(&["a", "a"]))])).unwrap_err();
+        let e = CopyOptions::parse(two(), None, &opts(&[("COLUMN_NAMES", names(&["a", "a"]))])).unwrap_err();
         assert_eq!(e, "COLUMN_NAMES: \"a\" appears twice");
-        let e = CopyOptions::parse(two(), &opts(&[("COLUMN_NAMES", names(&["a", ""]))])).unwrap_err();
+        let e = CopyOptions::parse(two(), None, &opts(&[("COLUMN_NAMES", names(&["a", ""]))])).unwrap_err();
         assert_eq!(e, "COLUMN_NAMES: name 2 is empty");
-        let e = CopyOptions::parse(two(), &opts(&[("COLUMN_NAMES", Val::Int(3))])).unwrap_err();
+        let e = CopyOptions::parse(two(), None, &opts(&[("COLUMN_NAMES", Val::Int(3))])).unwrap_err();
         assert_eq!(e, "COLUMN_NAMES must be a list of strings, not Int(3)");
-        let e = CopyOptions::parse(two(), &opts(&[("COLUMN_NAMES", Val::List(vec![Val::Int(1), s("b")]))]));
+        let e = CopyOptions::parse(two(), None, &opts(&[("COLUMN_NAMES", Val::List(vec![Val::Int(1), s("b")]))]));
         assert_eq!(e.unwrap_err(), "COLUMN_NAMES must be a string, not Int(1)");
-        let e = CopyOptions::parse(vec![SqlType::Unsupported("UUID".into())], &opts(&[("COLUMN_NAMES", s("u"))]));
+        let e = CopyOptions::parse(vec![SqlType::Unsupported("UUID".into())], None, &opts(&[("COLUMN_NAMES", s("u"))]));
         assert_eq!(e.unwrap_err(), "column \"u\": columns of type UUID cannot be written to Parquet by this extension");
+    }
+
+    #[test]
+    fn the_query_names_name_the_columns_unless_column_names_does() {
+        let query = || Some(vec!["id".to_string(), "Price".to_string()]);
+        let o = CopyOptions::parse(two(), query(), &[]).unwrap();
+        assert_eq!(o.schema.field(0).name(), "id");
+        assert_eq!(o.schema.field(1).name(), "Price");
+        let o = CopyOptions::parse(two(), query(), &opts(&[("COLUMN_NAMES", names(&["a", "b"]))])).unwrap();
+        assert_eq!(o.schema.field(1).name(), "b");
+        let e = CopyOptions::parse(two(), query(), &opts(&[("COLUMN_NAMES", names(&["a"]))])).unwrap_err();
+        assert_eq!(e, "COLUMN_NAMES has 1 names but the query has 2 columns");
+        // a column policy names a column as the query does
+        let o = CopyOptions::parse(two(), query(), &opts(&[("COLUMN_POLICY", s("Price=pcodec"))])).unwrap();
+        assert_eq!(o.writer.columns, vec![("Price".to_string(), Policy::Pcodec)]);
+        // names that do not fit (DuckDB makes a query's names unique and non-empty) are refused
+        // without blaming COLUMN_NAMES
+        let e = CopyOptions::parse(two(), Some(vec!["a".into(), "a".into()]), &[]).unwrap_err();
+        assert_eq!(e, "the query's column names: \"a\" appears twice");
+        let e = CopyOptions::parse(two(), Some(vec!["a".into()]), &[]).unwrap_err();
+        assert_eq!(e, "the query's column names has 1 names but the query has 2 columns");
+        let e = CopyOptions::parse(two(), Some(vec!["a".into(), "".into()]), &[]).unwrap_err();
+        assert_eq!(e, "the query's column names: name 2 is empty");
     }
 
     fn with(pairs: &[(&str, Val)]) -> Result<CopyOptions, String> {
         let mut all = opts(&[("COLUMN_NAMES", names(&["id", "price"]))]);
         all.extend(opts(pairs));
-        CopyOptions::parse(two(), &all)
+        CopyOptions::parse(two(), None, &all)
     }
 
     #[test]
@@ -452,7 +486,7 @@ mod tests {
     fn a_sample_of_long_strings_ends_at_sample_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.parquet");
-        let o = CopyOptions::parse(vec![SqlType::Varchar], &opts(&[("COLUMN_NAMES", s("doc"))])).unwrap();
+        let o = CopyOptions::parse(vec![SqlType::Varchar], None, &opts(&[("COLUMN_NAMES", s("doc"))])).unwrap();
         let mut w = CopyWriter::create(path.to_str().unwrap(), &o).unwrap();
         // vectors of 2048 strings of 4 KiB: 8 MiB each, far fewer rows than SAMPLE_ROWS
         let doc = "x".repeat(4096);

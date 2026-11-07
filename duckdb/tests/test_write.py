@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from canonical import lines
-from conftest import FILES, run_cli
+from conftest import API, FILES, run_cli
 
 
 def rows(con, sql):
@@ -149,7 +149,6 @@ def test_an_empty_result_writes_an_empty_file(con, tmp_path):
 @pytest.mark.parametrize(
     "options, message",
     [
-        ("", "FORMAT tparquet needs COLUMN_NAMES"),
         (", COLUMN_NAMES ['a']", "COLUMN_NAMES has 1 names but the query has 2 columns"),
         (", COLUMN_NAMES ['a', 'a']", 'COLUMN_NAMES: "a" appears twice'),
         (", COLUMN_NAMES ['a', 'b'], POLICY 'fast'", 'unknown policy "fast"'),
@@ -161,6 +160,30 @@ def test_an_empty_result_writes_an_empty_file(con, tmp_path):
 def test_bad_options_are_explained(con, tmp_path, options, message):
     with pytest.raises(duckdb.Error, match=message):
         con.execute(f"COPY (SELECT 1 AS a, 2 AS b) TO '{tmp_path}/x.parquet' (FORMAT tparquet{options})")
+
+
+def test_column_names_are_required_in_v1_and_come_from_the_query_in_v2(con, tmp_path):
+    q = 'SELECT 1::BIGINT AS id, \'x\' AS "Sym", 2.5::DOUBLE AS "with space"'
+    sql = f"COPY ({q}) TO '{tmp_path}/n.parquet' (FORMAT tparquet)"
+    if API == "v1":
+        # the C API v1 gives a COPY function the types of the columns but not their names
+        with pytest.raises(duckdb.Error, match="FORMAT tparquet needs COLUMN_NAMES"):
+            con.execute(sql)
+        return
+    con.execute(sql)
+    assert names_of(con, f"SELECT * FROM read_tparquet('{tmp_path}/n.parquet')") == ["id", "Sym", "with space"]
+    assert rows(con, f"SELECT * FROM read_tparquet('{tmp_path}/n.parquet')") == [(1, "x", 2.5)]
+    # DuckDB makes the names of a query unique before it hands them over
+    con.execute(f"COPY (SELECT 1 AS a, 2 AS a) TO '{tmp_path}/d.parquet' (FORMAT tparquet)")
+    assert names_of(con, f"SELECT * FROM read_tparquet('{tmp_path}/d.parquet')") == ["a", "a_1"]
+    # COLUMN_NAMES, when given, replaces them and is checked as in v1
+    con.execute(f"COPY ({q}) TO '{tmp_path}/r.parquet' (FORMAT tparquet, COLUMN_NAMES ['x', 'y', 'z'])")
+    assert names_of(con, f"SELECT * FROM read_tparquet('{tmp_path}/r.parquet')") == ["x", "y", "z"]
+    with pytest.raises(duckdb.Error, match="COLUMN_NAMES has 2 names but the query has 3 columns"):
+        con.execute(f"COPY ({q}) TO '{tmp_path}/r.parquet' (FORMAT tparquet, COLUMN_NAMES ['x', 'y'])")
+    # a column policy names a column as the query does
+    con.execute(f"COPY ({q}) TO '{tmp_path}/p.parquet' (FORMAT tparquet, COLUMN_POLICY ['with space=base'])")
+    assert codecs(tmp_path / "p.parquet")["with space"] == {"ZSTD"}
 
 
 @pytest.mark.parametrize(
@@ -313,8 +336,16 @@ def test_per_thread_output_needs_a_file_extension(con, tmp_path):
     con.execute("SET threads = 4")
     q = "SELECT i AS id FROM range(100000) r(i)"
     con.execute(f"COPY ({q}) TO '{tmp_path}/t' (FORMAT tparquet, COLUMN_NAMES ['id'], PER_THREAD_OUTPUT true)")
-    # the C API has no way to give a COPY function its extension: the files end in "."
-    assert all(p.name.endswith(".") for p in (tmp_path / "t").iterdir())
+    names = [p.name for p in (tmp_path / "t").iterdir()]
+    if API == "v1":
+        # the C API v1 has no way to give a COPY function its extension: the files end in "."
+        assert names and all(n.endswith(".") for n in names), names
+    else:
+        # the C API v2 build sets the extension of the format
+        assert names and all(n.endswith(".parquet") for n in names), names
+        assert rows(con, f"SELECT count(*), sum(id) FROM read_tparquet('{tmp_path}/t/*.parquet')") == [
+            (100000, 4999950000)
+        ]
     con.execute(
         f"COPY ({q}) TO '{tmp_path}/e' (FORMAT tparquet, COLUMN_NAMES ['id'], PER_THREAD_OUTPUT true, "
         "FILE_EXTENSION 'parquet')"
@@ -322,6 +353,29 @@ def test_per_thread_output_needs_a_file_extension(con, tmp_path):
     assert rows(con, f"SELECT count(*), sum(id) FROM read_tparquet('{tmp_path}/e/*.parquet')") == [
         (100000, 4999950000)
     ]
+
+
+def test_partitioned_writes_name_files_by_the_format_in_v2(con, tmp_path):
+    con.execute("CREATE TABLE t AS SELECT i AS id, i % 3 AS k, 'v' || i AS s FROM range(9000) r(i)")
+    names = "" if API == "v2" else ", COLUMN_NAMES ['id', 's']"
+    con.execute(f"COPY t TO '{tmp_path}/p' (FORMAT tparquet{names}, PARTITION_BY (k))")
+    files = sorted(p.relative_to(tmp_path / "p").as_posix() for p in (tmp_path / "p").rglob("*") if p.is_file())
+    assert [f.split("/")[0] for f in files] == ["k=0", "k=1", "k=2"]
+    if API == "v1":
+        assert all(f.endswith(".") for f in files), files
+        return
+    assert all(f.endswith(".parquet") for f in files), files
+    # the names come from the table, without the partition column
+    got = rows(
+        con,
+        f"SELECT regexp_extract(filename, 'k=(\\d)', 1)::BIGINT AS k, count(*), sum(id), min(s) "
+        f"FROM read_tparquet('{tmp_path}/p/*/*.parquet', filename := true) GROUP BY ALL ORDER BY 1",
+    )
+    assert got == rows(con, "SELECT k, count(*), sum(id), min(s) FROM t GROUP BY ALL ORDER BY 1")
+    con.execute(f"COPY t TO '{tmp_path}/w' (FORMAT tparquet, PARTITION_BY (k), WRITE_PARTITION_COLUMNS true)")
+    assert names_of(con, f"SELECT * FROM read_tparquet('{tmp_path}/w/*/*.parquet')") == ["id", "k", "s"]
+    diff = f"SELECT * FROM t EXCEPT ALL SELECT * FROM read_tparquet('{tmp_path}/w/**/*.parquet')"
+    assert rows(con, f"SELECT count(*) FROM ({diff})") == [(0,)]
 
 
 def test_options_duckdb_does_not_implement_for_the_format(con, tmp_path):
@@ -454,6 +508,19 @@ def test_a_copy_with_many_threads_keeps_the_query_order(con, tmp_path):
     assert a == rows(con, "SELECT v FROM src")
 
 
+def test_a_copy_of_a_parallel_scan_keeps_the_file_order(con, tmp_path):
+    src = copy(con, "SELECT (i * 7919) % 1000003 AS v, i AS id FROM range(1000000) r(i)", tmp_path / "src.parquet",
+               ROW_GROUP_ROWS=10000)
+    assert inspect(src)["row_groups"] == 100
+    con.execute("SET threads = 8")
+    out = copy(con, f"SELECT v, id FROM read_tparquet('{src}')", tmp_path / "out.parquet")
+    got = rows(con, f"SELECT count(*) FROM read_tparquet('{out}', file_row_number := true) WHERE id <> file_row_number")
+    assert got == [(0,)]
+    assert rows(con, f"SELECT count(*), sum(v) FROM read_tparquet('{out}')") == rows(
+        con, f"SELECT count(*), sum(v) FROM read_tparquet('{src}')"
+    )
+
+
 # ---------------------------------------------------------------------------------------------
 # COPY FROM
 
@@ -472,3 +539,17 @@ def test_copy_from_with_a_column_list_a_glob_and_errors(con, tmp_path):
     # INSERT ... SELECT maps by name instead
     con.execute(f"INSERT INTO swapped SELECT s, id FROM read_tparquet('{tmp_path}/a.parquet')")
     assert rows(con, "SELECT count(*) FROM swapped") == [(100,)]
+
+
+def test_copy_from_takes_the_flags_of_read_tparquet(con, tmp_path):
+    copy(con, "SELECT 1::BIGINT AS id, 'x' AS s", tmp_path / "a.parquet")
+    con.execute("CREATE TABLE f (id BIGINT, s VARCHAR, filename VARCHAR)")
+    con.execute(f"COPY f FROM '{tmp_path}/a.parquet' (FORMAT tparquet, FILENAME true)")
+    assert rows(con, "SELECT * FROM f") == [(1, "x", f"{tmp_path}/a.parquet")]
+    con.execute("CREATE TABLE t (id BIGINT, s VARCHAR)")
+    con.execute(f"COPY t FROM '{tmp_path}/a.parquet' (FORMAT tparquet, UNION_BY_NAME true)")
+    assert rows(con, "SELECT * FROM t") == [(1, "x")]
+    with pytest.raises(duckdb.Error, match="'delim' is not a supported option for copy function"):
+        con.execute(f"COPY t FROM '{tmp_path}/a.parquet' (FORMAT tparquet, DELIM ',')")
+    with pytest.raises(duckdb.Error, match="read_tparquet: filename must be a boolean"):
+        con.execute(f"COPY t FROM '{tmp_path}/a.parquet' (FORMAT tparquet, FILENAME 1)")

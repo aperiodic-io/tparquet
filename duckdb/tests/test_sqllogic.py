@@ -2,6 +2,7 @@
 
     # comment
     require tparquet      (the extension is always loaded; the line is documentation)
+    onlyif v1 | onlyif v2 (the next record runs only on that build of the extension)
     statement ok | statement error
     <sql, up to a blank line>
     ----                        (statement error only: a substring of the message follows)
@@ -18,7 +19,7 @@ import pathlib
 
 import pytest
 
-from conftest import FILES, connect, extension_path
+from conftest import API, FILES, connect, extension_path
 
 SQL_DIR = pathlib.Path(__file__).parent / "sql"
 
@@ -26,10 +27,16 @@ SQL_DIR = pathlib.Path(__file__).parent / "sql"
 def records(text: str):
     lines = text.splitlines()
     i = 0
+    only = None
     while i < len(lines):
         line = lines[i].strip()
         i += 1
         if not line or line.startswith("#") or line.startswith("require "):
+            continue
+        if line.startswith("onlyif "):
+            only = line.split()[1]
+            if only not in ("v1", "v2"):
+                raise ValueError(f"unknown build {only!r}")
             continue
         kind = line.split()
         if kind[0] not in ("statement", "query"):
@@ -43,7 +50,9 @@ def records(text: str):
             while i < len(lines) and lines[i].strip():
                 expected.append(lines[i])
                 i += 1
-        yield kind, "\n".join(sql), expected
+        if only in (None, API):
+            yield kind, "\n".join(sql), expected
+        only = None
 
 
 def show(v) -> str:
