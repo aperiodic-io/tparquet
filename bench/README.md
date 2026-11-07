@@ -3,7 +3,9 @@
 The [acceptance test](../rust/tparquet/tests/acceptance.rs) measures tparquet on synthetic data.
 This benchmark measures it on the sample and preview data that market data providers publish
 for evaluation, grouped by data type: trades, quotes, order books, bars, metrics and
-derivatives.
+derivatives. One group is not market data: the DevOps server metrics of
+[TSBS](https://github.com/timescale/tsbs), the data that metric stores are benchmarked with
+(see [Observability data](#observability-data-tsbs)).
 
 ```sh
 make bench            # from the repository root: downloads the samples, writes RESULTS.md
@@ -93,7 +95,46 @@ one run on one machine: compare them with each other, not across machines.
 
 About 1.2 GB is downloaded into `bench/data/` (git-ignored; `TPQ_BENCH_DATA` or `--data`
 moves it). None of it is in the repository: the providers' terms do not allow redistributing
-it, so every run downloads it from the provider.
+it, so every run downloads it from the provider. The TSBS data is not downloaded but generated
+into the same cache.
+
+### Observability data (TSBS)
+
+The market data above is what the providers sell. Metric stores are benchmarked on something
+else: [TSBS](https://github.com/timescale/tsbs), the Time Series Benchmark Suite that
+TimescaleDB, InfluxDB, VictoriaMetrics, QuestDB and ClickHouse publish their numbers on. Its
+`devops` use case simulates a fleet of servers that each report system metrics every 10
+seconds. [`tsbs.py`](src/tpq_bench/tsbs.py) generates it, a port of the Go generator
+(`pkg/data/usecases/devops`): 100 hosts, one day (2016-01-01) at 10 s, seed 123, so 864,000
+rows per measurement.
+
+| Measurement | Fields | Columns beyond the host's ten tags |
+|---|---:|---|
+| `cpu` (TSBS' cpu-only use case) | 10 | `usage_user`, `usage_system`, ... as int64 percentages |
+| `diskio`, `net` | 7, 8 | int64 counters; the tag `serial` or `interface` |
+| `disk`, `mem` | 7, 9 | int64 sizes and percentages; `mem` has three float64 percentages |
+| `kernel`, `nginx`, `postgresl`, `redis` | 6, 7, 16, 31 | int64 counters and gauges; `nginx` and `redis` have `port` and `server` tags |
+
+Nine measurements, 101 fields, as TSBS counts them. Every column is as TSBS types it: the
+host's tags (`hostname`, `region`, `datacenter`, `rack`, `os`, `arch`, `team`, `service`,
+`service_version`, `service_environment`) are strings, the values are int64 (TSBS truncates
+every walk to an integer) except `mem`'s percentages, and `time` is a UTC timestamp in
+nanoseconds. Rows are in the order the generator writes them: every host's report of a tick
+before the next tick. The `cpu` measurement is also measured with each host's series together
+(by host, then time), as a store keyed by series lays it out.
+
+Read these results with three things in mind:
+
+- **The data is synthetic.** The values are random walks (clamped, monotonic or free), as in
+  TSBS, not telemetry from real servers. They show how tparquet does on the data metric stores
+  are benchmarked on, not on what a fleet reports; real counters and gauges are less regular
+  (or more) than a random walk.
+- **It is a port, not the generator's output.** The model, the schema, the tags and the ranges
+  are TSBS', but the numbers come from Python's random number generator, so they are not the
+  ones `tsbs_generate_data --seed=123` writes. Compare sizes with each other, not with files
+  made by the Go tool.
+- **"As delivered" is the generated file**: Parquet written by pyarrow with its defaults
+  (Snappy, dictionaries), not TSBS' text formats.
 
 ## Running part of it
 
@@ -116,4 +157,5 @@ uv run --no-sync python scripts/mutmut_check.py     # fails unless every mutant 
 ```
 
 New sources go in [`catalog.py`](src/tpq_bench/catalog.py), with a loader in
-[`loaders.py`](src/tpq_bench/loaders.py) if the format is new.
+[`loaders.py`](src/tpq_bench/loaders.py) if the format is new. More TSBS data (more hosts, a
+longer span, another seed) is a `Tsbs(...)` fetcher with other arguments.

@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from conftest import Cached
-from tpq_bench import catalog, cli, fetch
+from tpq_bench import catalog, cli, fetch, report, tsbs
 
 
 def trades(path: pathlib.Path) -> pathlib.Path:
@@ -175,3 +175,28 @@ def test_the_default_cache_is_bench_data(
     monkeypatch.delenv("TPQ_BENCH_DATA")
     assert cli.main(["list"]) == 0
     assert capsys.readouterr().out == "trades  x/t.parquet  cached\n"
+
+
+def test_run_generates_a_tsbs_source_and_measures_it(tmp_path: pathlib.Path) -> None:
+    data = tmp_path / "data"
+    sources = [
+        catalog.Source(
+            "TSBS", f"devops {m}", "observability", f"tsbs/{m}.parquet", "parquet", tsbs.Tsbs(m, hosts=5, ticks=400)
+        )
+        for m in ("cpu", "mem", "redis")
+    ]
+    entries, skipped = cli.run(sources, data)
+    assert skipped == []
+    assert [(e.data, e.group, e.m.rows) for e in entries] == [
+        ("devops cpu", "observability", 2000),
+        ("devops mem", "observability", 2000),
+        ("devops redis", "observability", 2000),
+    ]
+    # the file as delivered is the generated one, in the cache
+    assert all(
+        e.source_bytes == (data / "tsbs" / f"{m}.parquet").stat().st_size
+        for e, m in zip(entries, ("cpu", "mem", "redis"))
+    )
+    # the floats of mem are PCODEC-coded or not, but every column has a codec
+    assert all(set(e.m.codecs) >= {"time", "hostname"} for e in entries)
+    assert "devops mem" in report.markdown(entries)

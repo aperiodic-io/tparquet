@@ -19,6 +19,7 @@ GROUPS = {
     "bars": "Bars (OHLCV)",
     "metrics": "Metrics (5m bars)",
     "derivatives": "Derivatives (funding, mark, index, open interest)",
+    "observability": "Observability (TSBS DevOps server metrics)",
 }
 
 

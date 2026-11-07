@@ -59,6 +59,18 @@ def test_groups_follow_the_order_of_the_data_types() -> None:
     assert [e.data for e in dict(report.groups(ENTRIES))["trades"]] == ["BTCUSDT trades", "TAQ trades"]
 
 
+def test_observability_is_the_last_data_type() -> None:
+    assert list(report.GROUPS) == ["trades", "quotes", "l2", "bars", "metrics", "derivatives", "observability"]
+    assert report.GROUPS["observability"] == "Observability (TSBS DevOps server metrics)"
+    entries = [
+        report.Entry("TSBS", "devops cpu", "observability", 5, m(10, 100, 50)),
+        report.Entry("NYSE", "TAQ trades", "trades", 5, m(10, 100, 50)),
+    ]
+    assert [g for g, _ in report.groups(entries)] == ["trades", "observability"]
+    assert "| Observability (TSBS DevOps server metrics) | 1 | 10 |" in report.markdown(entries)
+    assert "\n### Observability (TSBS DevOps server metrics)\n" in report.markdown(entries)
+
+
 def test_unknown_group_is_refused() -> None:
     with pytest.raises(ValueError, match="group"):
         report.groups([report.Entry("X", "y", "weather", 1, m(1, 1, 1))])

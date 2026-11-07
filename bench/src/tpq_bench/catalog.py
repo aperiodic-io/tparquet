@@ -1,7 +1,8 @@
 """The samples: what each provider publishes for evaluation, under one data type each.
 
 None of the files is in the repository (the providers' terms do not allow redistributing
-them); `tpq-bench fetch` downloads them from the providers into the cache.
+them); `tpq-bench fetch` downloads them from the providers into the cache. The exception is TSBS,
+the one source that is not a provider's: its data is generated into the cache.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import re
 from typing import TYPE_CHECKING
 
 from tpq_bench.fetch import Fetcher, Http, SignedUrl
+from tpq_bench.tsbs import MEASUREMENTS, Tsbs
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -150,7 +152,25 @@ _nyse = [
     )
 ]
 
-SOURCES: list[Source] = [*_aperiodic, *_tardis, *_lake, *_nyse]
+# --- TSBS, the Time Series Benchmark Suite (https://github.com/timescale/tsbs): the DevOps data
+# that metric stores are benchmarked with, 100 hosts reporting every 10 s for a day, generated
+# (see tpq_bench/tsbs.py). Every measurement in the order the generator writes it, every host's
+# report of a tick before the next tick; the cpu measurement, TSBS' cpu-only use case, again
+# with each host's series together, as a store keyed by series lays it out.
+_ORDER_LABELS = {"time": "in time order", "series": "by host and time"}
+_tsbs = [
+    Source(
+        "TSBS",
+        f"devops {measurement}, 100 hosts, 1 day at 10 s, {_ORDER_LABELS[order]} (generated)",
+        "observability",
+        f"tsbs/devops_{measurement}_{order}.parquet",
+        "parquet",
+        Tsbs(measurement, order),
+    )
+    for measurement, order in [*((m, "time") for m in MEASUREMENTS), ("cpu", "series")]
+]
+
+SOURCES: list[Source] = [*_aperiodic, *_tardis, *_lake, *_nyse, *_tsbs]
 
 
 def select(sources: Sequence[Source], words: Sequence[str]) -> list[Source]:
