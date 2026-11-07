@@ -1,8 +1,11 @@
 # The DuckDB extension `tparquet`. Run from duckdb/ (or `make -C duckdb ...`).
 #
-#   make build     release build: build/tparquet.duckdb_extension (and the tparquet CLI)
-#   make test      unit tests, then the SQL tests on the extension cargo builds for them
-#   make sql       the SQL tests on build/tparquet.duckdb_extension
+#   make build     release build: build/tparquet.duckdb_extension (C API v1, any DuckDB serving
+#                  C API v1.5.6) and build/v2/tparquet.duckdb_extension (C API v2, DuckDB 2.0.0
+#                  only), and the tparquet CLI
+#   make sign KEY=private.pem   signs both builds (sign.sh; README "Signing")
+#   make test      unit tests, then the SQL tests on both builds cargo makes for them
+#   make sql       the SQL tests on both builds in build/
 #   make thorough  the same with many more generated cases (Hypothesis profile `thorough`)
 #   make mutation  cargo mutants on the extension crate (SQL tests without the `slow` ones)
 #   make check     fmt, clippy, one arrow version, test
@@ -16,11 +19,14 @@ TARGET := $(or $(CARGO_TARGET_DIR),$(ROOT)/target)
 CRATE := -p tparquet-duckdb
 DYLIB := $(if $(filter Darwin,$(shell uname)),libtparquet_duckdb.dylib,libtparquet_duckdb.so)
 EXTENSION := build/tparquet.duckdb_extension
+EXTENSION_V2 := build/v2/tparquet.duckdb_extension
+PACKAGER := $(TARGET)/release/package-extension
+SQL_ENV = TPARQUET_CLI=$(abspath $(TARGET)/release/tparquet) TPARQUET_DUCKDB_PACKAGER=$(abspath $(PACKAGER))
 MUTANTS_OUT ?= $(TARGET)/mutants-duckdb
 MEMORY_LIMIT_MB ?= 2048
 TEST_TIMEOUT ?= 60
 
-.PHONY: venv build test sql thorough mutation check fmt-check clippy check-arrow clean
+.PHONY: venv build sign test sql thorough mutation check fmt-check clippy check-arrow clean
 
 venv: .venv/.synced
 
@@ -32,23 +38,29 @@ venv: .venv/.synced
 
 build:
 	$(CARGO) build --release -j $(JOBS) $(CRATE) -p tparquet --lib --bin tparquet --bin package-extension
-	@mkdir -p build
-	rm -f $(EXTENSION)
-	$(TARGET)/release/package-extension $(TARGET)/release/$(DYLIB) $(EXTENSION)
-	@echo "built $(EXTENSION)"
+	@mkdir -p build/v2
+	rm -f $(EXTENSION) $(EXTENSION_V2)
+	$(PACKAGER) --api v1 $(TARGET)/release/$(DYLIB) $(EXTENSION)
+	$(PACKAGER) --api v2 $(TARGET)/release/$(DYLIB) $(EXTENSION_V2)
+	@echo "built $(EXTENSION) and $(EXTENSION_V2)"
+
+sign:
+	@test -n "$(KEY)" || { echo "usage: make sign KEY=private.pem"; exit 2; }
+	PACKAGER=$(PACKAGER) ./sign.sh $(KEY) $(EXTENSION) $(EXTENSION_V2)
 
 test: venv
 	$(CARGO) test -j $(JOBS) $(CRATE)
 
 sql: venv build
-	TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION)) TPARQUET_CLI=$(abspath $(TARGET)/release/tparquet) \
-		$(PYTHON) -m pytest -q tests
+	TPARQUET_DUCKDB_API=v1 TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION)) $(SQL_ENV) $(PYTHON) -m pytest -q tests
+	TPARQUET_DUCKDB_API=v2 TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION_V2)) $(SQL_ENV) $(PYTHON) -m pytest -q tests
 
 # the SQL tests with many more generated tables, queries and damaged files (minutes)
 thorough: venv build
-	HYPOTHESIS_PROFILE=thorough TPARQUET_DUCKDB_FUZZ_CASES=5000 \
-	TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION)) TPARQUET_CLI=$(abspath $(TARGET)/release/tparquet) \
-		$(PYTHON) -m pytest -q tests
+	HYPOTHESIS_PROFILE=thorough TPARQUET_DUCKDB_FUZZ_CASES=5000 TPARQUET_DUCKDB_API=v1 \
+	TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION)) $(SQL_ENV) $(PYTHON) -m pytest -q tests
+	HYPOTHESIS_PROFILE=thorough TPARQUET_DUCKDB_FUZZ_CASES=5000 TPARQUET_DUCKDB_API=v2 \
+	TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION_V2)) $(SQL_ENV) $(PYTHON) -m pytest -q tests
 
 # Every viable mutant must be caught. The slow memory test is left out of the mutation run:
 # a mutant that only it could catch would also have to keep every other result right.
@@ -82,4 +94,4 @@ check-arrow:
 check: fmt-check clippy check-arrow test
 
 clean:
-	rm -f $(EXTENSION)
+	rm -f $(EXTENSION) $(EXTENSION_V2)

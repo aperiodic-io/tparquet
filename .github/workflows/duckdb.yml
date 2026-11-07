@@ -56,12 +56,17 @@ jobs:
           python3 -m pip install --user --require-hashes -r "$RUNNER_TEMP/uv.txt"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: make -C duckdb fmt-check check-arrow clippy
-      - name: build the extension and run the SQL tests on it (slow tests included)
+      - name: build both builds of the extension and run the SQL tests on each (slow tests included)
         run: make -C duckdb sql
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tparquet-linux_amd64
           path: duckdb/build/tparquet.duckdb_extension
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tparquet-c-api-v2-duckdb-2.0.0-linux_amd64
+          path: duckdb/build/v2/tparquet.duckdb_extension
           if-no-files-found: error
 
   test:
