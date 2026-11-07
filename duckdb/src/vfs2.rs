@@ -94,9 +94,23 @@ impl FileSystem for DuckFs {
         .map_err(|e| {
             format!("cannot glob {pattern:?}: {}", e.trim_start_matches("duckdb_v2_file_system_path_glob: "))
         })?;
+        let mut out: Vec<String> = out.into_iter().map(|p| as_written(pattern, p)).collect();
         out.sort();
         Ok(out)
     }
+}
+
+/// `path`, a match of `pattern`, with the scheme spelled as in `pattern`: DuckDB's glob over an
+/// fsspec file system answers `memory://data/*` with `memory:///data/...`, while a path without
+/// a glob is read and named as it is written.
+pub fn as_written(pattern: &str, path: String) -> String {
+    if let Some((scheme, rest)) = pattern.split_once("://")
+        && !rest.starts_with('/')
+        && let Some(tail) = path.strip_prefix(&format!("{scheme}:///"))
+    {
+        return format!("{scheme}://{tail}");
+    }
+    path
 }
 
 struct DuckFile {
@@ -126,5 +140,21 @@ impl RandomAccess for DuckFile {
         }
         call!(duckdb_v2_file_read_at(self.handle, buf.as_mut_ptr().cast(), buf.len() as u64, offset))
             .map_err(|e| e.trim_start_matches("duckdb_v2_file_read_at: ").to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glob_results_keep_the_spelling_of_the_pattern() {
+        // fsspec file systems answer a glob of memory://data/* with memory:///data/...
+        let p = |s: &str| s.to_string();
+        assert_eq!(as_written("memory://data/*.parquet", p("memory:///data/a.parquet")), "memory://data/a.parquet");
+        assert_eq!(as_written("memory:///data/*.parquet", p("memory:///data/a.parquet")), "memory:///data/a.parquet");
+        assert_eq!(as_written("s3://b/*.parquet", p("s3://b/a.parquet")), "s3://b/a.parquet");
+        assert_eq!(as_written("/tmp/*.parquet", p("/tmp/a.parquet")), "/tmp/a.parquet");
+        assert_eq!(as_written("memory://data/*", p("other:///x")), "other:///x");
     }
 }

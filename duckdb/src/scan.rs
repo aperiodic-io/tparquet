@@ -12,7 +12,7 @@
 
 use crate::fs::{FileSystem, Input, in_home, is_remote};
 use crate::prune::{Predicate, Reading, Stats, may_match, reading, stats_of};
-use crate::types::{SqlType, deduplicate, normalize, whole_intervals};
+use crate::types::{SqlType, Target, deduplicate, normalize, whole_intervals};
 use arrow_array::{ArrayRef, new_null_array};
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 use parquet::arrow::ProjectionMask;
@@ -434,6 +434,8 @@ pub struct Scan {
     batch_size: usize,
     /// Row groups where no row can satisfy these are skipped.
     predicates: Vec<Predicate>,
+    /// What the batches go to ([`normalize`]).
+    target: Target,
     queue: Mutex<Queue>,
 }
 
@@ -467,8 +469,15 @@ impl Scan {
             projected,
             batch_size: batch_size.max(1),
             predicates: vec![],
+            target: Target::default(),
             queue: Mutex::new(Queue { metadata, ..Default::default() }),
         }
+    }
+
+    /// The scan, with its batches normalized for `target` (the `duckdb` crate by default).
+    pub fn for_target(mut self, target: Target) -> Self {
+        self.target = target;
+        self
     }
 
     /// The scan, skipping row groups where no row can satisfy all of `predicates`.
@@ -526,8 +535,8 @@ impl Scan {
                             .iter()
                             .zip(&self.projected)
                             .map(|(p, &c)| match p {
-                                Some(p) => normalize(batch.column(*p)),
-                                None => normalize(&new_null_array(&self.bound.columns[c].arrow, num_rows)),
+                                Some(p) => normalize(batch.column(*p), self.target),
+                                None => normalize(&new_null_array(&self.bound.columns[c].arrow, num_rows), self.target),
                             })
                             .collect::<Result<Vec<_>, String>>()
                             .map_err(|e| format!("{}: {e}", r.file.path))?;

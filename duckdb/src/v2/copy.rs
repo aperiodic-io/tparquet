@@ -21,6 +21,7 @@ use crate::chunk::convert;
 use crate::copy::{CopyOptions, CopyWriter, FORMAT};
 use crate::ffi::Val;
 use crate::scan::{self, Bound, ReadOptions, Scan, Slot};
+use crate::types::Target;
 use crate::v2::read::{self, Chunk, Reader, VECTOR_SIZE};
 use crate::v2::sys::{self, Code, Type, Value, as_str, factory, from_str, opaque};
 use crate::v2::vector::Flat;
@@ -301,7 +302,7 @@ fn from_init_global_impl(info: s::duckdb_v2_copy_from_init_global_info_handle) -
     let bind: &FromBind = unsafe { data(|p| call!(duckdb_v2_copy_from_init_global_get_bind_data(info, p))) }?;
     let columns: Vec<u64> = (0..bind.bound.result_columns().len() as u64).collect();
     let slots = bind.bound.slots(&columns);
-    let scan = Scan::new(bind.bound.clone(), &slots, VECTOR_SIZE);
+    let scan = Scan::new(bind.bound.clone(), &slots, VECTOR_SIZE).for_target(Target::ArrowImporter);
     call!(duckdb_v2_copy_from_init_global_set_max_threads(info, scan.max_threads()))?;
     let mut state = opaque(FromGlobal { scan, slots });
     call!(duckdb_v2_copy_from_init_global_set_global_state(info, &mut state))

@@ -12,6 +12,7 @@
 use crate::ffi::Val;
 use crate::prune::Predicate;
 use crate::scan::{self, Bound, Local, ReadOptions, Scan, ScanBatch, Slot};
+use crate::types::Target;
 use crate::v2::filter::{self, Columns};
 use crate::v2::sys::{self, Code, as_str, factory, logical_type, opaque, type_from_id};
 use crate::vfs2::{DuckFs, with_context};
@@ -180,7 +181,9 @@ fn init_global_impl(info: s::duckdb_v2_table_function_init_global_info_handle) -
         .collect::<Result<Vec<u64>, String>>()?;
     let slots = bind.bound.slots(&indices);
     let predicates = bind.predicates.lock().map_err(|_| "poisoned")?.clone();
-    let scan = Scan::new(bind.bound.clone(), &slots, VECTOR_SIZE).with_predicates(predicates);
+    let scan = Scan::new(bind.bound.clone(), &slots, VECTOR_SIZE)
+        .with_predicates(predicates)
+        .for_target(Target::ArrowImporter);
     call!(duckdb_v2_table_function_init_global_set_max_threads(info, scan.max_threads()))?;
     let mut state = opaque(GlobalState { scan, slots });
     call!(duckdb_v2_table_function_init_global_set_global_state(info, &mut state))?;
@@ -235,7 +238,10 @@ fn plain(t: &DataType) -> DataType {
         DataType::LargeList(f) => DataType::LargeList(field(f)),
         DataType::FixedSizeList(f, n) => DataType::FixedSizeList(field(f), *n),
         DataType::Map(f, sorted) => DataType::Map(field(f), *sorted),
-        DataType::Struct(fs) => DataType::Struct(fs.iter().map(field).collect()),
+        DataType::Struct(fs) => {
+            let names = crate::types::deduplicate(fs.iter().map(|f| f.name().clone()).collect());
+            DataType::Struct(fs.iter().zip(names).map(|(f, n)| field(f).as_ref().clone().with_name(n)).collect())
+        }
         other => other.clone(),
     }
 }
@@ -293,12 +299,16 @@ pub fn import(
 ) -> Result<usize, String> {
     let rows = columns.first().map_or(0, |c| c.len());
     let count = columns.len() as u64;
-    let fields: Fields =
-        columns.iter().enumerate().map(|(i, c)| Field::new(format!("c{i}"), plain(c.data_type()), true)).collect();
-    let array = StructArray::try_new(fields.clone(), columns, None).map_err(|e| e.to_string())?;
+    let field = |i: usize, t: DataType| Field::new(format!("c{i}"), t, true);
+    let fields: Fields = columns.iter().enumerate().map(|(i, c)| field(i, c.data_type().clone())).collect();
+    let array = StructArray::try_new(fields, columns, None).map_err(|e| e.to_string())?;
     if importer.is_none() {
+        // the schema DuckDB imports with: the types of the bound columns ([`plain`]); the array
+        // itself carries only buffers across
+        let plain_fields: Fields =
+            array.columns().iter().enumerate().map(|(i, c)| field(i, plain(c.data_type()))).collect();
         let schema =
-            arrow_schema::ffi::FFI_ArrowSchema::try_from(&DataType::Struct(fields)).map_err(|e| e.to_string())?;
+            arrow_schema::ffi::FFI_ArrowSchema::try_from(&DataType::Struct(plain_fields)).map_err(|e| e.to_string())?;
         let mut created = Importer(std::ptr::null_mut());
         let schema_ptr = &schema as *const _ as *mut libduckdb_sys::ArrowSchema;
         call!(duckdb_v2_arrow_importer_create(context, schema_ptr, 0, &mut created.0))?;
@@ -439,6 +449,15 @@ mod tests {
         assert!(e.metadata().is_empty());
         assert_eq!(e.data_type(), &DataType::FixedSizeBinary(16));
         assert_eq!(plain(&DataType::Int8), DataType::Int8);
+        // struct fields are named as the bound type names them (DuckDB's names are
+        // case-insensitive)
+        let s = DataType::Struct(
+            vec![Field::new("a", DataType::Int8, true), Field::new("A", DataType::Utf8, false)].into(),
+        );
+        let DataType::Struct(fs) = plain(&s) else { panic!() };
+        assert_eq!(fs.iter().map(|f| f.name().as_str()).collect::<Vec<_>>(), ["a", "A_1"]);
+        assert_eq!(fs[1].data_type(), &DataType::Utf8);
+        assert!(!fs[1].is_nullable());
     }
 
     #[test]

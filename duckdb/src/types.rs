@@ -8,7 +8,10 @@
 //!
 //! This module has no DuckDB calls, so all of it is unit tested without a database.
 
-use arrow_array::{Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray};
+use arrow_array::{
+    Array, ArrayRef, Decimal128Array, DurationMicrosecondArray, FixedSizeListArray, LargeListArray, ListArray,
+    MapArray, StructArray,
+};
 use arrow_cast::cast;
 use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
 use std::fmt;
@@ -356,18 +359,27 @@ pub fn whole_intervals(data_type: &DataType) -> DataType {
     }
 }
 
-/// Whether [`normalize`] changes arrays of this type.
-fn needs_normalize(data_type: &DataType) -> bool {
+/// What takes the arrays [`normalize`] reshapes to DuckDB vectors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Target {
+    /// The `duckdb` crate's Arrow-to-vector writer (the C API v1 build, [`crate::read`]).
+    #[default]
+    DuckdbCrate,
+    /// DuckDB's own Arrow importer (the C API v2 build, [`crate::v2::read`]).
+    ArrowImporter,
+}
+
+/// Whether [`normalize`] changes (or checks) arrays of this type for `target`.
+fn needs_normalize(data_type: &DataType, target: Target) -> bool {
+    let crate_writer = target == Target::DuckdbCrate;
     match data_type {
-        DataType::Dictionary(_, _)
-        | DataType::Float16
-        | DataType::Decimal256(_, _)
-        | DataType::Time64(TimeUnit::Nanosecond)
-        | DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => true,
+        DataType::Dictionary(_, _) | DataType::Float16 | DataType::Decimal256(_, _) => true,
+        DataType::Time64(TimeUnit::Nanosecond) | DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => crate_writer,
+        DataType::Decimal128(_, _) | DataType::Duration(TimeUnit::Second | TimeUnit::Millisecond) => !crate_writer,
         DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) | DataType::Map(f, _) => {
-            needs_normalize(f.data_type())
+            needs_normalize(f.data_type(), target)
         }
-        DataType::Struct(fields) => fields.iter().any(|f| needs_normalize(f.data_type())),
+        DataType::Struct(fields) => fields.iter().any(|f| needs_normalize(f.data_type(), target)),
         _ => false,
     }
 }
@@ -387,22 +399,40 @@ fn with_type(field: &FieldRef, data_type: DataType) -> FieldRef {
 ///
 /// - dictionaries are decoded, half floats widened to `FLOAT`, 256-bit decimals (of at most 38
 ///   digits) narrowed to 128 bits;
-/// - nanosecond times and time-zoned timestamps keep their 64-bit values but lose the Arrow type
-///   that would make the `duckdb` crate round them to microseconds (DuckDB stores them in
-///   `TIME_NS` and `TIMESTAMPTZ_NS`);
+/// - for the `duckdb` crate ([`Target::DuckdbCrate`]), nanosecond times and time-zoned
+///   timestamps keep their 64-bit values but lose the Arrow type that would make the crate round
+///   them to microseconds (DuckDB stores them in `TIME_NS` and `TIMESTAMPTZ_NS`);
+/// - for DuckDB's Arrow importer ([`Target::ArrowImporter`]), durations in seconds and
+///   milliseconds become microseconds, with the error of [`intervals`] for one that does not fit
+///   (the importer's own error does not name the value), and 128-bit decimals are checked
+///   against their precision (the importer would take a wider value; the crate refuses it);
 /// - lists, maps and structs are rebuilt around their normalized children.
-pub fn normalize(array: &ArrayRef) -> Result<ArrayRef, String> {
-    if !needs_normalize(array.data_type()) {
+pub fn normalize(array: &ArrayRef, target: Target) -> Result<ArrayRef, String> {
+    if !needs_normalize(array.data_type(), target) {
         return Ok(array.clone());
     }
     let cast_to = |t: &DataType| cast(array, t).map_err(|e| e.to_string());
+    let normalize = |a: &ArrayRef| normalize(a, target);
     match array.data_type() {
         DataType::Dictionary(_, values) => normalize(&cast_to(values)?),
         DataType::Float16 => cast_to(&DataType::Float32),
-        DataType::Decimal256(w, s) => cast_to(&DataType::Decimal128(*w, *s)),
+        DataType::Decimal256(w, s) => normalize(&cast_to(&DataType::Decimal128(*w, *s))?),
         DataType::Time64(TimeUnit::Nanosecond) => reinterpret(array, DataType::Int64),
         DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => {
             reinterpret(array, DataType::Timestamp(TimeUnit::Nanosecond, None))
+        }
+        DataType::Decimal128(width, _) => {
+            let a = array.as_any().downcast_ref::<Decimal128Array>().ok_or("not a decimal array")?;
+            let digits = |v: i128| v.unsigned_abs().checked_ilog10().map_or(1, |l| l + 1);
+            match a.iter().flatten().map(digits).find(|&d| d > *width as u32) {
+                // the message of the `duckdb` crate, which the C API v1 build reads with
+                Some(d) => Err(format!("decimal value has {d} digits, exceeding width {width}")),
+                None => Ok(array.clone()),
+            }
+        }
+        DataType::Duration(_) => {
+            let micros = intervals(array.as_ref())?.into_iter().map(|i| i.micros).collect::<Vec<_>>();
+            Ok(Arc::new(DurationMicrosecondArray::new(micros.into(), array.nulls().cloned())))
         }
         DataType::List(f) => {
             let a = array.as_any().downcast_ref::<ListArray>().ok_or("not a list array")?;
@@ -810,16 +840,16 @@ mod tests {
     }
 
     fn norm(a: impl Array + 'static) -> ArrayRef {
-        normalize(&(Arc::new(a) as ArrayRef)).unwrap()
+        normalize(&(Arc::new(a) as ArrayRef), Target::DuckdbCrate).unwrap()
     }
 
     #[test]
     fn plain_arrays_are_kept() {
         let a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
-        assert!(Arc::ptr_eq(&normalize(&a).unwrap(), &a));
+        assert!(Arc::ptr_eq(&normalize(&a, Target::DuckdbCrate).unwrap(), &a));
         let l: ArrayRef =
             Arc::new(ListArray::from_iter_primitive::<arrow_array::types::Int32Type, _, _>(vec![Some(vec![Some(1)])]));
-        assert!(Arc::ptr_eq(&normalize(&l).unwrap(), &l));
+        assert!(Arc::ptr_eq(&normalize(&l, Target::DuckdbCrate).unwrap(), &l));
     }
 
     #[test]
@@ -849,11 +879,11 @@ mod tests {
         assert_eq!(ts.as_ref(), &TimestampNanosecondArray::from(vec![1_735_689_600_007_000_001]) as &dyn Array);
         // microsecond and naive nanosecond timestamps are already copied exactly
         let us: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![1]).with_timezone("UTC"));
-        assert!(Arc::ptr_eq(&normalize(&us).unwrap(), &us));
+        assert!(Arc::ptr_eq(&normalize(&us, Target::DuckdbCrate).unwrap(), &us));
         let ns: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![1]));
-        assert!(Arc::ptr_eq(&normalize(&ns).unwrap(), &ns));
+        assert!(Arc::ptr_eq(&normalize(&ns, Target::DuckdbCrate).unwrap(), &ns));
         let t_us: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1]));
-        assert!(Arc::ptr_eq(&normalize(&t_us).unwrap(), &t_us));
+        assert!(Arc::ptr_eq(&normalize(&t_us, Target::DuckdbCrate).unwrap(), &t_us));
     }
 
     fn dict_strings(values: &[Option<&str>]) -> ArrayRef {
@@ -936,5 +966,68 @@ mod tests {
         assert!(n.is_null(1));
         let DataType::Map(f, false) = n.data_type() else { panic!() };
         assert_eq!(f.name(), "entries");
+    }
+
+    fn import(a: impl Array + 'static) -> Result<ArrayRef, String> {
+        normalize(&(Arc::new(a) as ArrayRef), Target::ArrowImporter)
+    }
+
+    fn kept(a: ArrayRef, target: Target) {
+        assert!(Arc::ptr_eq(&normalize(&a, target).unwrap(), &a), "{:?}", a.data_type());
+    }
+
+    #[test]
+    fn the_arrow_importer_takes_nanoseconds_as_they_are() {
+        kept(Arc::new(Time64NanosecondArray::from(vec![Some(1), None])), Target::ArrowImporter);
+        kept(Arc::new(TimestampNanosecondArray::from(vec![1]).with_timezone("UTC")), Target::ArrowImporter);
+        // dictionaries are still decoded
+        let n = normalize(&dict_strings(&[Some("a"), None]), Target::ArrowImporter).unwrap();
+        assert_eq!(n.as_ref(), &StringArray::from(vec![Some("a"), None]) as &dyn Array);
+    }
+
+    #[test]
+    fn the_arrow_importer_takes_durations_in_microseconds() {
+        let s = import(DurationSecondArray::from(vec![Some(2), None])).unwrap();
+        assert_eq!(s.as_ref(), &DurationMicrosecondArray::from(vec![Some(2_000_000), None]) as &dyn Array);
+        let ms = import(DurationMillisecondArray::from(vec![-3])).unwrap();
+        assert_eq!(ms.as_ref(), &DurationMicrosecondArray::from(vec![-3000]) as &dyn Array);
+        let e = import(DurationSecondArray::from(vec![i64::MAX / 2])).unwrap_err();
+        assert_eq!(e, "the duration 4611686018427387903 s does not fit in an INTERVAL");
+        let e = import(DurationMillisecondArray::from(vec![i64::MIN / 10])).unwrap_err();
+        assert_eq!(e, "the duration -922337203685477580 ms does not fit in an INTERVAL");
+        // microseconds and nanoseconds as they are (the importer truncates nanoseconds, as the
+        // C API v1 build does), and intervals
+        kept(Arc::new(DurationMicrosecondArray::from(vec![i64::MAX])), Target::ArrowImporter);
+        kept(Arc::new(DurationNanosecondArray::from(vec![i64::MIN])), Target::ArrowImporter);
+        kept(Arc::new(IntervalYearMonthArray::from(vec![1])), Target::ArrowImporter);
+        // the C API v1 build writes durations itself
+        kept(Arc::new(DurationSecondArray::from(vec![i64::MAX])), Target::DuckdbCrate);
+        // inside a list
+        let values: ArrayRef = Arc::new(DurationSecondArray::from(vec![1, 2]));
+        let offsets = arrow_buffer::OffsetBuffer::new(vec![0, 2].into());
+        let list = import(ListArray::new(item(values.data_type().clone()), offsets, values, None)).unwrap();
+        let list = list.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.values().as_ref(), &DurationMicrosecondArray::from(vec![1_000_000, 2_000_000]) as &dyn Array);
+    }
+
+    #[test]
+    fn the_arrow_importer_gets_decimals_within_their_precision() {
+        let decimal =
+            |v: i128, p: u8| Decimal128Array::from(vec![Some(v), None]).with_precision_and_scale(p, 0).unwrap();
+        kept(Arc::new(decimal(999, 3)), Target::ArrowImporter);
+        kept(Arc::new(decimal(-999, 3)), Target::ArrowImporter);
+        let e = import(decimal(1000, 3)).unwrap_err();
+        assert_eq!(e, "decimal value has 4 digits, exceeding width 3");
+        assert_eq!(import(decimal(-1000, 3)).unwrap_err(), "decimal value has 4 digits, exceeding width 3");
+        assert_eq!(import(decimal(i128::MIN, 38)).unwrap_err(), "decimal value has 39 digits, exceeding width 38");
+        // a struct of one
+        let s = StructArray::new(
+            Fields::from(vec![Field::new("d", DataType::Decimal128(18, 0), true)]),
+            vec![Arc::new(decimal(10_i128.pow(18), 18))],
+            None,
+        );
+        assert!(import(s).is_err());
+        // the duckdb crate checks decimals itself
+        kept(Arc::new(decimal(1000, 3)), Target::DuckdbCrate);
     }
 }
