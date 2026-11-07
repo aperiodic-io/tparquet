@@ -11,6 +11,7 @@
 //!   reads its row group in batches of at most one DuckDB vector.
 
 use crate::fs::{FileSystem, Input, in_home, is_remote};
+use crate::prune::{Predicate, Reading, Stats, may_match, reading, stats_of};
 use crate::types::{SqlType, deduplicate, normalize, whole_intervals};
 use arrow_array::{ArrayRef, new_null_array};
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
@@ -249,11 +250,45 @@ pub struct OpenFile {
     fields: Vec<Option<usize>>,
     /// The file row number of the first row of each row group.
     row_group_starts: Vec<u64>,
+    /// For each column of [`Bound::columns`]: whether this file has it, and the leaf column
+    /// and [`Reading`] of its statistics (for predicates; `None` without predicates).
+    statistics: Option<Vec<FileColumn>>,
+}
+
+/// What a file holds of a bound column, for row-group skipping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileColumn {
+    Absent,
+    Stats { leaf: usize, reading: Reading },
+    Unknown,
+}
+
+/// The leaf column of the top-level field `root`, if that field is a primitive column.
+fn leaf_of_root(metadata: &ArrowReaderMetadata, root: usize) -> Option<usize> {
+    let schema = metadata.parquet_schema();
+    if !schema.root_schema().get_fields().get(root)?.is_primitive() {
+        return None;
+    }
+    (0..schema.num_columns()).find(|&leaf| schema.get_column_root_idx(leaf) == root)
 }
 
 impl OpenFile {
-    fn new(path: String, metadata: ArrowReaderMetadata, bound: &Bound, projected: &[usize]) -> Result<Self, String> {
+    fn new(
+        path: String,
+        metadata: ArrowReaderMetadata,
+        bound: &Bound,
+        projected: &[usize],
+        with_statistics: bool,
+    ) -> Result<Self, String> {
         let file_columns = columns_of(&path, metadata.schema())?;
+        // where each bound column is in this file (a top-level field index)
+        let position = |want: &Column| -> Option<usize> {
+            if bound.options.union_by_name {
+                file_columns.iter().position(|f| same_name(&f.name, &want.name) && f.sql == want.sql)
+            } else {
+                bound.columns.iter().position(|c| std::ptr::eq(c, want))
+            }
+        };
         let reference = &bound.files[0];
         let fields = if bound.options.union_by_name {
             projected
@@ -290,11 +325,41 @@ impl OpenFile {
             row_group_starts.push(start);
             start += rg.num_rows().max(0) as u64;
         }
-        Ok(Self { path, metadata, fields, row_group_starts })
+        let statistics = with_statistics.then(|| {
+            bound
+                .columns
+                .iter()
+                .map(|c| match position(c) {
+                    None => FileColumn::Absent,
+                    Some(root) => leaf_of_root(&metadata, root)
+                        .and_then(|leaf| {
+                            reading(metadata.metadata(), leaf, &c.sql)
+                                .map(|reading| FileColumn::Stats { leaf, reading })
+                        })
+                        .unwrap_or(FileColumn::Unknown),
+                })
+                .collect()
+        });
+        Ok(Self { path, metadata, fields, row_group_starts, statistics })
     }
 
     fn row_groups(&self) -> usize {
         self.row_group_starts.len()
+    }
+
+    /// Whether a row of `row_group` may satisfy every predicate.
+    fn may_match(&self, row_group: usize, predicates: &[Predicate]) -> bool {
+        let Some(columns) = &self.statistics else { return true };
+        let rg = self.metadata.metadata().row_group(row_group);
+        let rows = rg.num_rows().max(0) as u64;
+        let stats = |c: usize| -> Option<Stats> {
+            match columns.get(c)? {
+                FileColumn::Absent => Some(Stats::all_null(rows)),
+                FileColumn::Stats { leaf, reading } => Some(stats_of(rg.column(*leaf).statistics(), *reading, rows)),
+                FileColumn::Unknown => None,
+            }
+        };
+        predicates.iter().all(|p| may_match(p, &stats))
     }
 
     /// A reader of one row group, with the projected columns.
@@ -325,6 +390,9 @@ impl OpenFile {
 #[derive(Debug)]
 pub struct ScanBatch {
     pub file: Arc<OpenFile>,
+    /// The position of the batch's row group among the row groups of all the files, in file
+    /// order: DuckDB's batch index, by which it restores the order of rows read in parallel.
+    pub batch: u64,
     /// The file row number of the first row.
     pub first_row: u64,
     pub num_rows: usize,
@@ -336,6 +404,8 @@ pub struct ScanBatch {
 struct Queue {
     next_file: usize,
     current: Option<(Arc<OpenFile>, usize)>,
+    /// The batch index of the next row group.
+    next_batch: u64,
     /// Bind's metadata, taken when the file is opened.
     metadata: Vec<Option<ArrowReaderMetadata>>,
 }
@@ -347,6 +417,8 @@ pub struct Scan {
     /// The projected file columns, as indices into [`Bound::columns`].
     projected: Vec<usize>,
     batch_size: usize,
+    /// Row groups where no row can satisfy these are skipped.
+    predicates: Vec<Predicate>,
     queue: Mutex<Queue>,
 }
 
@@ -361,6 +433,7 @@ struct Reader {
     reader: ParquetRecordBatchReader,
     positions: Vec<Option<usize>>,
     next_row: u64,
+    batch: u64,
 }
 
 impl Scan {
@@ -378,8 +451,15 @@ impl Scan {
             bound,
             projected,
             batch_size: batch_size.max(1),
+            predicates: vec![],
             queue: Mutex::new(Queue { metadata, ..Default::default() }),
         }
+    }
+
+    /// The scan, skipping row groups where no row can satisfy all of `predicates`.
+    pub fn with_predicates(mut self, predicates: Vec<Predicate>) -> Self {
+        self.predicates = predicates;
+        self
     }
 
     /// How many threads could work at once: one per row group, as far as bind knows.
@@ -389,14 +469,19 @@ impl Scan {
     }
 
     /// The next row group to read, opening files as needed.
-    fn next_unit(&self) -> Result<Option<(Arc<OpenFile>, usize)>, String> {
+    fn next_unit(&self) -> Result<Option<(Arc<OpenFile>, usize, u64)>, String> {
         let mut q = self.queue.lock().map_err(|_| "a reader thread panicked")?;
         loop {
             if let Some((file, rg)) = q.current.take()
                 && rg < file.row_groups()
             {
                 q.current = Some((file.clone(), rg + 1));
-                return Ok(Some((file, rg)));
+                let batch = q.next_batch;
+                q.next_batch += 1;
+                if !file.may_match(rg, &self.predicates) {
+                    continue;
+                }
+                return Ok(Some((file, rg, batch)));
             }
             let i = q.next_file;
             let Some(path) = self.bound.files.get(i) else { return Ok(None) };
@@ -405,7 +490,8 @@ impl Scan {
                 Some(m) => m,
                 None => open_metadata(self.bound.fs.as_ref(), path)?,
             };
-            let file = OpenFile::new(path.clone(), metadata, &self.bound, &self.projected)?;
+            let file =
+                OpenFile::new(path.clone(), metadata, &self.bound, &self.projected, !self.predicates.is_empty())?;
             q.current = Some((Arc::new(file), 0));
         }
     }
@@ -432,17 +518,18 @@ impl Scan {
                             .map_err(|e| format!("{}: {e}", r.file.path))?;
                         let first_row = r.next_row;
                         r.next_row += num_rows as u64;
-                        return Ok(Some(ScanBatch { file: r.file.clone(), first_row, num_rows, columns }));
+                        let batch = r.batch;
+                        return Ok(Some(ScanBatch { file: r.file.clone(), batch, first_row, num_rows, columns }));
                     }
                     Some(Ok(_)) => continue,
                     Some(Err(e)) => return Err(format!("cannot read {}: {e}", r.file.path)),
                     None => local.reader = None,
                 }
             }
-            let Some((file, rg)) = self.next_unit()? else { return Ok(None) };
+            let Some((file, rg, batch)) = self.next_unit()? else { return Ok(None) };
             let (reader, positions) = file.reader(self.bound.fs.as_ref(), rg, self.batch_size)?;
             let next_row = file.row_group_starts[rg];
-            local.reader = Some(Reader { file, reader, positions, next_row });
+            local.reader = Some(Reader { file, reader, positions, next_row, batch });
         }
     }
 }
@@ -878,5 +965,98 @@ mod tests {
         assert_eq!(batches[0].file.path, "mem://d/a.parquet");
         let e = Bound::bind(fs, vec!["mem://d/missing.parquet".into()], ReadOptions::default()).unwrap_err();
         assert_eq!(e, "no such file: mem://d/missing.parquet");
+    }
+
+    fn id_cmp(op: crate::prune::Op, v: i128) -> crate::prune::Predicate {
+        crate::prune::Predicate::Compare { column: 0, op, value: crate::prune::Scalar::Int(v) }
+    }
+
+    #[test]
+    fn skips_row_groups_the_predicates_rule_out() {
+        use crate::prune::{Op, Predicate};
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(dir.path(), "a.parquet", &ints(100, 0), 10);
+        let b = write(dir.path(), "b.parquet", &ints(100, 100), 10);
+        let bound = Arc::new(bind(vec![a.clone(), b], ReadOptions::default()).unwrap());
+        let slots = [Slot::File { column: 0, projected: 0 }];
+        let firsts = |preds: Vec<Predicate>| {
+            let scan = Scan::new(bound.clone(), &slots, 100).with_predicates(preds);
+            all_rows(&scan).iter().map(|b| (b.file.path.ends_with("a.parquet"), b.first_row)).collect::<Vec<_>>()
+        };
+        assert_eq!(firsts(vec![id_cmp(Op::Ge, 185)]), vec![(false, 80), (false, 90)]);
+        assert_eq!(firsts(vec![id_cmp(Op::Lt, 10)]), vec![(true, 0)]);
+        assert_eq!(firsts(vec![id_cmp(Op::Ge, 45), id_cmp(Op::Le, 54)]), vec![(true, 40), (true, 50)]);
+        assert_eq!(
+            firsts(vec![Predicate::Or(vec![id_cmp(Op::Eq, 5), id_cmp(Op::Eq, 195)])]),
+            vec![(true, 0), (false, 90)]
+        );
+        assert!(firsts(vec![id_cmp(Op::Gt, 1000)]).is_empty());
+        assert!(firsts(vec![Predicate::IsNull(0)]).is_empty());
+        assert_eq!(firsts(vec![]).len(), 20);
+        // predicates on the filename or on columns without statistics skip nothing
+        let strings = crate::prune::Predicate::Compare { column: 1, op: Op::Eq, value: crate::prune::Scalar::Int(1) };
+        assert_eq!(firsts(vec![strings]).len(), 20);
+        let bound_f = Arc::new(bind(vec![a], ReadOptions { filename: true, ..Default::default() }).unwrap());
+        let scan = Scan::new(bound_f, &slots, 100).with_predicates(vec![Predicate::IsNull(2)]);
+        assert_eq!(all_rows(&scan).len(), 10);
+    }
+
+    #[test]
+    fn a_column_a_file_lacks_is_null_for_its_predicates() {
+        use crate::prune::{Op, Predicate};
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(dir.path(), "a.parquet", &ints(10, 0), 5);
+        let c = write(dir.path(), "c.parquet", &one("other", vec![1, 2, 3]), 5);
+        let opts = ReadOptions { union_by_name: true, ..Default::default() };
+        let bound = Arc::new(bind(vec![a, c], opts).unwrap());
+        let other = bound.columns.iter().position(|c| c.name == "other").unwrap();
+        let slots = [Slot::File { column: other, projected: 0 }];
+        let files = |p: Predicate| {
+            let scan = Scan::new(bound.clone(), &slots, 100).with_predicates(vec![p]);
+            all_rows(&scan).iter().map(|b| b.file.path.rsplit('/').next().unwrap().to_string()).collect::<Vec<_>>()
+        };
+        let eq = |v| Predicate::Compare { column: other, op: Op::Eq, value: crate::prune::Scalar::Int(v) };
+        assert_eq!(files(eq(2)), strings(&["c.parquet"]));
+        assert_eq!(files(Predicate::IsNull(other)), strings(&["a.parquet", "a.parquet"]));
+        assert_eq!(files(Predicate::IsNotNull(other)), strings(&["c.parquet"]));
+        // c.parquet has no id: every id there is NULL
+        assert_eq!(files(id_cmp(Op::Lt, 3)), strings(&["a.parquet"]));
+    }
+
+    #[test]
+    fn batches_carry_the_index_of_their_row_group_in_scan_order() {
+        use crate::prune::Op;
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(dir.path(), "a.parquet", &ints(25, 0), 10);
+        let b = write(dir.path(), "b.parquet", &ints(25, 25), 10);
+        let bound = Arc::new(bind(vec![a, b], ReadOptions::default()).unwrap());
+        let slots = [Slot::File { column: 0, projected: 0 }];
+        let scan = Scan::new(bound.clone(), &slots, 4);
+        let batches = all_rows(&scan);
+        let index: Vec<(u64, u64)> = batches.iter().map(|b| (b.batch, b.first_row)).collect();
+        assert_eq!(
+            index,
+            vec![
+                (0, 0),
+                (0, 4),
+                (0, 8),
+                (1, 10),
+                (1, 14),
+                (1, 18),
+                (2, 20),
+                (2, 24),
+                (3, 0),
+                (3, 4),
+                (3, 8),
+                (4, 10),
+                (4, 14),
+                (4, 18),
+                (5, 20),
+                (5, 24)
+            ]
+        );
+        // skipped row groups keep their index, so indices stay those of the file order
+        let scan = Scan::new(bound, &slots, 100).with_predicates(vec![id_cmp(Op::Ge, 35)]);
+        assert_eq!(all_rows(&scan).iter().map(|b| b.batch).collect::<Vec<_>>(), vec![4, 5]);
     }
 }
