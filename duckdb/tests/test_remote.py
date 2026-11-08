@@ -120,6 +120,50 @@ def test_a_damaged_remote_file_is_named(mcon, memfs):
         rows(mcon, "SELECT * FROM read_tparquet('memory://data/bad.parquet')")
 
 
+class _Fire(MemoryFile):
+    def read(self, *args, **kwargs):
+        raise OSError("the disk is on fire")
+
+
+class BrokenFileSystem(MemoryFileSystem):
+    """Files that fail as remote storage can: `fire` fails every read, `short` is shorter than
+    its listed size, `nosize` has no size."""
+
+    protocol = "broken"
+
+    def __init__(self, data, **kwargs):
+        super().__init__(**kwargs)
+        self.data = data
+
+    def _open(self, path, mode="rb", **kwargs):
+        return (_Fire if "fire" in path else MemoryFile)(None, None, self.data)
+
+    def info(self, path, **kwargs):
+        if "nosize" in path:
+            raise OSError("no size today")
+        return {"name": path, "size": len(self.data) + (100 if "short" in path else 0), "type": "file"}
+
+
+@pytest.fixture
+def bcon(local):
+    c = connect()
+    c.register_filesystem(BrokenFileSystem((local / "all.parquet").read_bytes(), skip_instance_cache=True))
+    yield c
+    c.close()
+
+
+@pytest.mark.parametrize("function", ["read_tparquet", "tparquet_metadata"])
+def test_failing_reads_say_why(bcon, function):
+    def fails(name, why):
+        with pytest.raises(duckdb.Error, match=rf"(?s)broken://d/{name}\.parquet\b.*: .*{why}"):
+            rows(bcon, f"SELECT count(*) FROM {function}('broken://d/{name}.parquet')")
+
+    fails("fire", "the disk is on fire")
+    fails("nosize", "no size today")
+    # the footer is read at the listed end, past the last byte
+    fails("short", "the file ends 8 bytes early" if API == "v1" else "only 0 bytes returned")
+
+
 def test_copy_from_a_remote_file(mcon):
     mcon.execute("CREATE TABLE t (id BIGINT, price DECIMAL(21, 1), sym VARCHAR)")
     mcon.execute("COPY t FROM 'memory://data/all.parquet' (FORMAT tparquet)")

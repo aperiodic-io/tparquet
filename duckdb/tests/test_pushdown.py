@@ -16,6 +16,7 @@ from canonical import rows_of
 from conftest import API, connect, encode, rows
 
 GROUP = 2048  # DuckDB writes row groups of whole vectors
+EPOCH = 1577836800  # 2020-01-01 UTC
 N = 10 * GROUP
 SKIPS = API == "v2"
 
@@ -34,7 +35,16 @@ SELECT
     (i * 0.001)::DECIMAL(30, 3) AS dec30,
     CASE WHEN i // {GROUP} = 5 THEN NULL ELSE i END AS gap,
     i % 2 = 0 AS even,
-    i // {GROUP} AS grp
+    i // {GROUP} AS grp,
+    (i // {GROUP})::TINYINT AS g_i8,
+    (i // {GROUP})::SMALLINT AS g_i16,
+    (i // {GROUP})::UTINYINT AS g_u8,
+    (i // {GROUP})::USMALLINT AS g_u16,
+    (i // {GROUP})::UINTEGER AS g_u32,
+    (i * 0.5)::DOUBLE AS f64,
+    (TIMESTAMP '2020-01-01' + INTERVAL (i) SECOND)::TIMESTAMP_NS AS ts_ns,
+    to_timestamp({EPOCH} + i) AS tstz,
+    (i * 0.001 - 30)::DECIMAL(30, 3) AS dneg
 FROM range({N}) r(i)
 """
 
@@ -112,6 +122,16 @@ RULE_OUT = [
     f"ts_ms >= (TIMESTAMP '2020-01-01' + INTERVAL {HI} SECOND)::TIMESTAMP_MS",
     f"dec9 < {LO / 100:.2f}",
     f"dec30 >= {HI / 1000:.3f}",
+    # a negative constant of a wide decimal (both halves of its 128 bits)
+    f"dneg < {LO / 1000 - 30:.3f}",
+    "g_i8 < 5",
+    "g_i16 > 5",
+    "g_u8 < 5",
+    "g_u16 = 3",
+    "g_u32 >= 6",
+    f"f64 < {LO // 2}",
+    f"ts_ns < (TIMESTAMP '2020-01-01' + INTERVAL {LO - 1} SECOND)::TIMESTAMP_NS",
+    f"tstz < to_timestamp({EPOCH + LO - 1})",
     f"id < {LO} AND str LIKE 'k%'",
     "gap IS NOT NULL",
 ]

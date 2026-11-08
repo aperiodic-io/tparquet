@@ -22,10 +22,10 @@ exclude_re = [
     # is converted. Not destroying them leaks memory DuckDB accounts to the database and changes
     # nothing a query can observe (equivalent mutants).
     'duckdb/src/v2/copy\.rs:.*<impl Drop for (Function|Collection|SharedScan|WorkerScan)>::drop',
-    # The same for the C API v1 file system of a bind and the open options of a file: not
-    # destroying them leaks a few bytes and changes nothing a query can observe (equivalent
-    # mutants).
-    'duckdb/src/vfs1\.rs:.*<impl Drop for (DuckFs|Options)>::drop',
+    # The same for the file systems, open options and file handles of both builds (vfs1, vfs2):
+    # not destroying them leaks, and a file left open changes nothing a query can observe
+    # (equivalent mutants).
+    'duckdb/src/vfs[12]\.rs:.*<impl Drop for (DuckFs|Options|DuckFile)>::drop',
     # The same for the C API v2 handles of values, logical types, Arrow importers and table
     # functions (destroying none, or only null handles, leaks; equivalent mutants).
     'duckdb/src/v2/(sys|read)\.rs:.*<impl Drop for (Value|Type|Importer|Function)>::drop',
@@ -38,6 +38,9 @@ exclude_re = [
     # a constant as well (duckdb_v2_expression_constant_get_value fails), so the guard only
     # spares a failing call (equivalent mutant).
     'duckdb/src/v2/filter\.rs:.*replace match guard constant\(\*b\) with true in predicate',
+    # A decimal constant's 128 bits are `upper << 64 | lower`: the shifted half has no low bits
+    # set, so `|` and `^` give the same number (equivalent mutant).
+    'duckdb/src/v2/filter\.rs:.*replace \| with \^ in scalar',
     # duckdb_file_system_open sets the file handle exactly when it succeeds, so "failed or no
     # handle" and "failed and no handle" are the same condition; the handle check only guards
     # against a DuckDB that broke that contract (equivalent mutant).
