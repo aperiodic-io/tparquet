@@ -189,16 +189,12 @@ def test_copy_writes_what_read_tparquet_reads(tmp_path_factory, table, write_opt
         source = in_order(d / "standard.parquet")
         copy_to(con, source, d / "copy.parquet", **options)
         assert describe(con, f"SELECT * FROM read_tparquet('{d}/copy.parquet')") == describe(con, source)
+        got, want = read(con, in_order(d / "copy.parquet")), read(con, source)
         if DUCKDB_1:
-            # DuckDB 1.x's COPY does not always keep the order of an ordered query (its own
-            # FORMAT parquet neither): the rows are DuckDB's own COPY's, in its order
-            standard = {**options, "COMPRESSION": "zstd" if options["COMPRESSION"] == "pcodec" else options["COMPRESSION"]}
-            opts = "".join(f", {k} {v}" for k, v in standard.items())
-            con.execute(f"COPY ({source}) TO '{d}/own.parquet' (FORMAT parquet{opts})")
-            expected = read(con, in_order(d / "own.parquet", "read_parquet"))
-        else:
-            expected = read(con, source)
-        assert read(con, in_order(d / "copy.parquet")) == expected
+            # DuckDB 1.x's COPY does not always keep the order of an ordered query, nor the same
+            # wrong order from one run to the next (its own FORMAT parquet neither): the same rows
+            got, want = sorted(got), sorted(want)
+        assert got == want
     finally:
         con.close()
 
