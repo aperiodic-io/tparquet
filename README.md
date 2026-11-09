@@ -51,7 +51,10 @@ one thread, tparquet writes at 109 MB/s of Arrow data (ZSTD(9): 104, tuned: 155)
 writes about 3× slower and reads at two thirds of ZSTD(9)'s speed.
 
 Every dataset, with its write and read speeds, is in [`bench/RESULTS.md`](bench/RESULTS.md).
-`make bench` reproduces it (it downloads about 1.2 GB). The quickest way to find out what
+`make bench` reproduces it (it downloads about 1.2 GB). The benchmark also has a synthetic
+metric-store workload, the DevOps data of TSBS, the benchmark suite of time series databases:
+0.68× of ZSTD(9) and 0.93× of tuned ZSTD(9) over 10 datasets, and 0.35× of ZSTD(9) on cpu
+metrics sorted by host ([details](bench/README.md#observability-tsbs-devops-metrics)). The quickest way to find out what
 tparquet does for your data is still to run it on one of your own files.
 
 ## Try it on your own file
