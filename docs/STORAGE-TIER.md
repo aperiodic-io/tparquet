@@ -64,7 +64,7 @@ COPY (SELECT * FROM read_tparquet('trades/*.parquet') WHERE day = '2025-06-01')
 TO 'out/trades.parquet' (FORMAT parquet, COMPRESSION zstd);
 ```
 
-DuckDB's own writer does not keep NaN payloads (DuckDB README, *Writing*); use
+DuckDB's own writer does not keep NaN payloads (`duckdb/README.md`, *Writing PCODEC*); use
 `tparquet decode` or `transcode` when the copy must be bit for bit.
 
 The copy is larger than the tparquet file. It is not necessarily the size of the file the data

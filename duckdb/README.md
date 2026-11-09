@@ -83,6 +83,10 @@ Every other COPY option (`ROW_GROUP_SIZE`, `PARTITION_BY`, `PER_THREAD_OUTPUT`, 
 `ENCRYPTION_CONFIG`, ...) is DuckDB's. COPY writes through DuckDB's file system, so remote
 destinations work as with `FORMAT parquet`.
 
+NaN payloads: the PCODEC columns keep them bit for bit (PLAIN, without a dictionary). DuckDB's
+`FORMAT parquet`, and `FORMAT tparquet` with another codec, keep one NaN per dictionary: the
+conformance vector's `0x7ff0000000000001` comes out as DuckDB's own NaN.
+
 On 2,000,000 market-like ticks (`tests/test_acceptance.py`), the PCODEC file is at most 0.63
 of DuckDB's `COMPRESSION zstd, COMPRESSION_LEVEL 9` file, and it reads back bit for bit.
 

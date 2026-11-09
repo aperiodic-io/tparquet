@@ -3,10 +3,12 @@ FLOAT and DOUBLE columns (the default) and ZSTD for the others."""
 
 import json
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from canonical import lines
-from conftest import codecs, connect, rows, run_cli
+from conftest import FILES, codecs, connect, copy_to, rows, run_cli
 
 import duckdb
 
@@ -180,11 +182,34 @@ def test_special_floats_round_trip_bit_for_bit(tmp_path, con):
     con.execute(f"COPY ({query}) TO '{tmp_path}/f.parquet' (FORMAT tparquet)")
     got = rows(con, f"SELECT k, x::VARCHAR FROM read_tparquet('{tmp_path}/f.parquet') ORDER BY k")
     assert got == rows(con, f"SELECT k, x::VARCHAR FROM ({query}) ORDER BY k")
-    raw = pq.read_table  # noqa: F841 (pyarrow cannot read PCODEC: the decoded file shows the bits)
+    # pyarrow cannot read PCODEC: the decoded file shows the bits
     out = run_cli("decode", tmp_path / "f.parquet", tmp_path / "fd.parquet")
     assert out.returncode == 0, out.stderr
     bits = [json.dumps(r) for r in pq.read_table(tmp_path / "fd.parquet").column("x").to_pylist()]
     assert bits[1] == "Infinity" and bits[2] == "-Infinity"
+
+
+def float_bits(table: pa.Table) -> dict[str, list]:
+    def bits(a):
+        a = a.combine_chunks()
+        return pc.cast(a.view(pa.uint64() if pa.types.is_float64(a.type) else pa.uint32()), pa.uint64()).to_pylist()
+
+    return {n: bits(table[n]) for n in table.column_names if pa.types.is_floating(table[n].type)}
+
+
+def in_order(path):
+    return f"SELECT * EXCLUDE (file_row_number) FROM read_tparquet('{path}', file_row_number := true) ORDER BY file_row_number"
+
+
+def test_nan_payloads_survive_a_copy(tmp_path, con):
+    # the PCODEC columns are PLAIN without a dictionary; DuckDB's dictionary, which FORMAT parquet
+    # uses, keeps one NaN (DUCKDB_ORACLE_LOSES_NAN_PAYLOADS in acceptance/cross/vectors.py)
+    src = FILES / "float_specials.parquet"
+    want = float_bits(con.sql(in_order(src)).to_arrow_table())
+    quiet = (0x7FF8000000000000, 0xFFF8000000000000)
+    assert any(v not in quiet and (v >> 52) & 0x7FF == 0x7FF and v & ((1 << 52) - 1) for v in want["f64"])
+    copy_to(con, in_order(src), tmp_path / "f.parquet")
+    assert float_bits(con.sql(in_order(tmp_path / "f.parquet")).to_arrow_table()) == want
 
 
 def inspect(path) -> dict[str, dict]:
