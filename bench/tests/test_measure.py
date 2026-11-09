@@ -50,7 +50,7 @@ def test_rebatch_of_nothing_is_nothing() -> None:
     assert list(measure.rebatch(reader(ticks(0)), 5)) == []
 
 
-def test_measure_writes_the_three_files_with_the_same_data(tmp_path: pathlib.Path) -> None:
+def test_measure_writes_the_four_files_with_the_same_data(tmp_path: pathlib.Path) -> None:
     m = measure.measure(reader(ticks(20_000), ticks(30_000, 20_000)), tmp_path, batch_rows=16_384, keep=True)
     assert m.rows == 50_000
     # the in-memory size of the batches the writers got
@@ -59,6 +59,18 @@ def test_measure_writes_the_three_files_with_the_same_data(tmp_path: pathlib.Pat
     assert m.zstd9_bytes == z9.stat().st_size
     assert m.tuned_bytes == tuned.stat().st_size
     assert m.tparquet_bytes == auto.stat().st_size
+    alp = tmp_path / "alp.parquet"
+    assert m.alp_bytes == alp.stat().st_size
+    assert tpq.verify(z9, alp) is None
+    # the ALP baseline: the tuned encodings, ALP on the floating-point columns, ZSTD(9)
+    assert m.alp_encodings == {**m.encodings, "price": "ALP"}
+    md = pq.ParquetFile(alp).metadata
+    alp_columns = {md.row_group(0).column(i).path_in_schema: md.row_group(0).column(i) for i in range(3)}
+    assert {c.compression for c in alp_columns.values()} == {"ZSTD"}
+    # pyarrow does not know ALP (encoding 10), and names it UNKNOWN
+    assert set(alp_columns["price"].encodings) == {"RLE", "UNKNOWN"}
+    assert "DELTA_BINARY_PACKED" in alp_columns["ts"].encodings
+    assert m.ratio_alp == pytest.approx(m.tparquet_bytes / m.alp_bytes)
     # the baseline is standard Parquet, ZSTD level 9 on every column
     md = pq.ParquetFile(z9).metadata
     assert {md.row_group(0).column(i).compression for i in range(3)} == {"ZSTD"}
@@ -79,7 +91,9 @@ def test_measure_writes_the_three_files_with_the_same_data(tmp_path: pathlib.Pat
     assert m.tparquet_bytes < m.zstd9_bytes
     assert m.ratio == pytest.approx(m.tparquet_bytes / m.zstd9_bytes)
     assert m.ratio_tuned == pytest.approx(m.tparquet_bytes / m.tuned_bytes)
-    for t in (m.write_s_zstd9, m.write_s_tuned, m.write_s_tparquet, m.read_s_zstd9, m.read_s_tuned, m.read_s_tparquet):
+    writes = (m.write_s_zstd9, m.write_s_tuned, m.write_s_alp, m.write_s_tparquet)
+    reads = (m.read_s_zstd9, m.read_s_tuned, m.read_s_alp, m.read_s_tparquet)
+    for t in writes + reads:
         assert t > 0
 
 
@@ -131,14 +145,46 @@ def test_the_smallest_encoding_is_chosen() -> None:
     assert set(sizes["text_id"]) == {"dictionary", "DELTA_BYTE_ARRAY", "DELTA_LENGTH_BYTE_ARRAY"}
 
 
+def test_alp_encodings() -> None:
+    types: dict[str, pa.DataType] = {
+        "f64": pa.float64(),
+        "f32": pa.float32(),
+        "f16": pa.float16(),
+        "ts": pa.int64(),
+        "lots": pa.float64(),
+        "side": pa.string(),
+        "flag": pa.bool_(),
+    }
+    schema = pa.schema(types)
+    tuned = {
+        "f64": "BYTE_STREAM_SPLIT",
+        "f32": "dictionary",
+        "f16": "dictionary",
+        "ts": "DELTA_BINARY_PACKED",
+        "lots": "dictionary",
+        "side": "DELTA_BYTE_ARRAY",
+        "flag": "dictionary",
+    }
+    # ALP is for FLOAT and DOUBLE only; float16 is a FIXED_LEN_BYTE_ARRAY
+    assert measure.alp_encodings(schema, tuned) == {
+        "f64": "ALP",
+        "f32": "ALP",
+        "f16": "dictionary",
+        "ts": "DELTA_BINARY_PACKED",
+        "lots": "ALP",
+        "side": "DELTA_BYTE_ARRAY",
+        "flag": "dictionary",
+    }
+
+
 def test_times_are_the_writers_and_readers_own(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # a clock that ticks once per reading: each timed call takes exactly one tick
     ticks_ = iter(range(10**6))
     monkeypatch.setattr(time, "perf_counter", lambda: float(next(ticks_)))
     m = measure.measure(reader(ticks(5_000)), tmp_path, batch_rows=2_000)
     # three batches and the footer, for each writer; one full read of each file
-    assert (m.write_s_zstd9, m.write_s_tuned, m.write_s_tparquet) == (4.0, 4.0, 4.0)
-    assert (m.read_s_zstd9, m.read_s_tuned, m.read_s_tparquet) == (1.0, 1.0, 1.0)
+    assert (m.write_s_zstd9, m.write_s_tuned, m.write_s_alp, m.write_s_tparquet) == (4.0, 4.0, 4.0, 4.0)
+    assert (m.read_s_zstd9, m.read_s_tuned, m.read_s_alp, m.read_s_tparquet) == (1.0, 1.0, 1.0, 1.0)
 
 
 def test_the_tuned_file_is_zstd_level_9() -> None:
@@ -175,9 +221,12 @@ def test_the_tuned_file_is_zstd_level_9() -> None:
     assert tuned != written()
 
 
-def test_files_that_differ_are_an_error(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tpq, "verify", lambda a, b: "row 3, column price" if "tuned" in str(b) else None)
-    with pytest.raises(AssertionError, match=r"^the tuned file differs from the ZSTD\(9\) file: row 3, column price$"):
+@pytest.mark.parametrize("name", ["tuned", "alp", "tparquet"])
+def test_files_that_differ_are_an_error(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setattr(tpq, "verify", lambda a, b: "row 3, column price" if f"/{name}." in str(b) else None)
+    with pytest.raises(
+        AssertionError, match=rf"^the {name} file differs from the ZSTD\(9\) file: row 3, column price$"
+    ):
         measure.measure(reader(ticks(100)), tmp_path)
     assert list(tmp_path.iterdir()) == []
 

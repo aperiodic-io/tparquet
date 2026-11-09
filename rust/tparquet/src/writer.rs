@@ -20,6 +20,11 @@ pub struct WriterOptions {
     /// `book.levels.list.item` (`list.element` with `coerce_types`). The longest name that
     /// covers a leaf wins; a name is matched against whole field names, which may hold dots.
     pub columns: Vec<(String, Policy)>,
+    /// Per-column encodings of the base columns, named as `columns` names them: such a column
+    /// is written with that encoding and no dictionary. PCODEC columns ignore it (they are
+    /// always `PLAIN`); under `Policy::Auto`, PCODEC is compared with the base codec in this
+    /// encoding.
+    pub encodings: Vec<(String, Encoding)>,
     /// pcodec compression level of the PCODEC columns.
     pub level: PcodecLevel,
     /// Codec of every other column.
@@ -57,6 +62,7 @@ impl Default for WriterOptions {
         Self {
             policy: Policy::Auto,
             columns: vec![],
+            encodings: vec![],
             level: PcodecLevel::default(),
             base: default_base(),
             properties: WriterProperties::default(),
@@ -74,6 +80,12 @@ impl WriterOptions {
     /// Sets the policy of the column `name`.
     pub fn with_column(mut self, name: impl Into<String>, policy: Policy) -> Self {
         self.columns.push((name.into(), policy));
+        self
+    }
+
+    /// Sets the encoding of the column `name` when it gets the base codec.
+    pub fn with_encoding(mut self, name: impl Into<String>, encoding: Encoding) -> Self {
+        self.encodings.push((name.into(), encoding));
         self
     }
 
@@ -100,6 +112,8 @@ impl WriterOptions {
 #[derive(Debug, Clone)]
 struct Leaf {
     path: ColumnPath,
+    /// The encoding of the column when it gets the base codec, when one is set.
+    encoding: Option<Encoding>,
     /// `None` when the column is not eligible for PCODEC.
     policy: Option<Policy>,
 }
@@ -148,14 +162,25 @@ impl<W: Write + Send> Writer<W> {
             .iter()
             .map(|c| Leaf {
                 path: c.path().clone(),
+                encoding: options
+                    .encodings
+                    .iter()
+                    .filter(|(name, _)| covers(name, c.path().parts()))
+                    .max_by_key(|(name, _)| name.len())
+                    .map(|&(_, e)| e),
                 policy: eligible(c.physical_type())
                     .then(|| resolve(c.path().parts(), &options.columns, options.policy)),
             })
             .collect();
-        if let Some((name, _)) =
-            options.columns.iter().find(|(name, _)| !leaves.iter().any(|l| covers(name, l.path.parts())))
-        {
+        let names = options.columns.iter().map(|(name, _)| name).chain(options.encodings.iter().map(|(name, _)| name));
+        if let Some(name) = names.into_iter().find(|name| !leaves.iter().any(|l| covers(name, l.path.parts()))) {
             return Err(invalid(format!("no column named {name:?}")));
+        }
+        // the writer properties panic on them: a dictionary is enabled, not set as the encoding
+        if let Some((_, e)) =
+            options.encodings.iter().find(|(_, e)| matches!(e, Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY))
+        {
+            return Err(invalid(format!("{e} is a dictionary encoding: the dictionary is the writer's default")));
         }
         let mut writer =
             Self { schema, options, pcodec: vec![false; leaves.len()], leaves, chosen: None, state: State::Failed };
@@ -172,6 +197,9 @@ impl<W: Write + Send> Writer<W> {
     /// when any is (or when `v2`).
     fn properties(&self, pcodec: &[bool], v2: bool) -> WriterProperties {
         let mut b = self.options.properties.clone().into_builder().set_compression(self.options.base);
+        for (leaf, e) in self.leaves.iter().filter_map(|l| l.encoding.map(|e| (l, e))) {
+            b = b.set_column_encoding(leaf.path.clone(), e).set_column_dictionary_enabled(leaf.path.clone(), false);
+        }
         for (leaf, _) in self.leaves.iter().zip(pcodec).filter(|(_, p)| **p) {
             b = b
                 .set_column_compression(leaf.path.clone(), Compression::PCODEC(self.options.level))

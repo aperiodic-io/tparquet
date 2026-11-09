@@ -11,10 +11,12 @@ table = tpq.read_table("trades.parquet", columns=["ts", "price"])
 stream = tpq.read_batches("trades.parquet")              # __arrow_c_stream__, for any Arrow library
 ```
 
-- `write_table(data, path, policy="auto", columns=None, level=8, base="zstd(3)", row_group_size=None)`:
-  `data` is anything with `__arrow_c_stream__` or `__arrow_c_array__`; `policy` is `"auto"` (PCODEC or
-  the base codec per column, whichever is smaller on the first batch), `"pcodec"` or `"base"`, and
-  `columns` maps a column name or dotted leaf path to its own policy.
+- `write_table(data, path, policy="auto", columns=None, level=8, base="zstd(3)", row_group_size=None,
+  encodings=None)`: `data` is anything with `__arrow_c_stream__` or `__arrow_c_array__`; `policy` is
+  `"auto"` (PCODEC or the base codec per column, whichever is smaller on the first batch), `"pcodec"`
+  or `"base"`, `columns` maps a column name or dotted leaf path to its own policy, and `encodings`
+  maps one to the Parquet encoding of its base-codec pages (`"ALP"`, `"BYTE_STREAM_SPLIT"`,
+  `"DELTA_BINARY_PACKED"`..., no dictionary; PCODEC columns stay PLAIN).
 - `Writer(path, schema, ...)`: a streaming context manager with the same options.
 - `ParquetFile(path)`: `.schema`, `.metadata`, `.iter_batches()`, `.read()`.
 - `transcode`, `inspect`, `verify`; `tparquet.codec` for the page payload alone.

@@ -30,15 +30,16 @@ Measured on the sample and preview data of four market data providers: Aperiodic
 Crypto Lake and NYSE, 151M rows in 31 datasets. The baseline is Parquet with ZSTD level 9,
 written two ways: with the writer's defaults, and *tuned*, with the best encoding chosen per
 column (DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT, DELTA_BYTE_ARRAY, ...), as the providers' own
-files are.
+files are. A third baseline, *ALP*, is the tuned file with Parquet's new ALP encoding on every
+floating-point column.
 
-| Data | Rows | ZSTD(9) | ZSTD(9) tuned | tparquet | vs ZSTD(9) | vs tuned |
-|---|---:|---:|---:|---:|---:|---:|
-| Trades (crypto perps and spot, US equities) | 138.9M | 737.0 MB | 520.0 MB | 362.2 MB | 0.49× | 0.70× |
-| Quotes (top of book) | 6.8M | 80.6 MB | 63.3 MB | 51.0 MB | 0.63× | 0.81× |
-| Order books (L2 snapshots and updates) | 5.5M | 126.4 MB | 109.2 MB | 58.6 MB | 0.46× | 0.54× |
-| Bars, metrics, derivatives | 288K | 13.1 MB | 8.2 MB | 6.8 MB | 0.52× | 0.83× |
-| **All** | 151.5M | 957.1 MB | 700.7 MB | 478.6 MB | **0.50×** | **0.68×** |
+| Data | Rows | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | vs ZSTD(9) | vs tuned | vs ALP |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Trades (crypto perps and spot, US equities) | 138.9M | 737.0 MB | 520.0 MB | 480.6 MB | 362.2 MB | 0.49× | 0.70× | 0.75× |
+| Quotes (top of book) | 6.8M | 80.6 MB | 63.3 MB | 63.3 MB | 51.0 MB | 0.63× | 0.81× | 0.81× |
+| Order books (L2 snapshots and updates) | 5.5M | 126.4 MB | 109.2 MB | 95.7 MB | 58.6 MB | 0.46× | 0.54× | 0.61× |
+| Bars, metrics, derivatives | 288K | 13.1 MB | 8.2 MB | 10.0 MB | 6.8 MB | 0.52× | 0.83× | 0.68× |
+| **All** | 151.5M | 957.1 MB | 700.7 MB | 649.5 MB | 478.6 MB | **0.50×** | **0.68×** | **0.74×** |
 
 Every value comes back bit for bit, and tparquet is smaller on every one of the 31 datasets.
 It chooses PCODEC or ZSTD per column, on the first batch: here 478 of the 480 numeric columns
@@ -46,9 +47,9 @@ got PCODEC. Strings and flags keep ZSTD.
 
 If your files compress like these trades, 1 TB of ZSTD(9) Parquet becomes about 490 GB (about
 700 GB if your writer already tunes its encodings), and a full scan reads half the bytes. On
-one thread, tparquet writes at 109 MB/s of Arrow data (ZSTD(9): 104, tuned: 155) and reads at
-925 MB/s (ZSTD(9): 1,031, tuned: 1,225). On wide order books, where every column is PCODEC, it
-writes about 3× slower and reads at two thirds of ZSTD(9)'s speed.
+one thread, tparquet writes at 102 MB/s of Arrow data (ZSTD(9): 97, tuned: 141, ALP: 169) and
+reads at 924 MB/s (ZSTD(9): 916, tuned: 1,129, ALP: 1,231). On wide order books, where every
+column is PCODEC, it writes about 3× slower than ALP and reads at 0.81× of ZSTD(9)'s speed.
 
 Every dataset, with its write and read speeds, is in [`bench/RESULTS.md`](bench/RESULTS.md).
 `make bench` reproduces it (it downloads about 1.2 GB). The quickest way to find out what

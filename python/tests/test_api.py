@@ -81,6 +81,34 @@ def test_row_group_size(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
     assert md.num_rows == 2000
 
 
+def test_column_encodings(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
+    path = tmp_path / "alp.parquet"
+    encodings = {"f64": "ALP", "f32": "alp", "i64": "DELTA_BINARY_PACKED"}
+    codecs = ppc.write_table(numbers, path, policy="base", base="zstd(9)", encodings=encodings)
+    assert set(codecs.values()) == {"ZSTD"}
+    md = pq.ParquetFile(path).metadata.row_group(0)
+    # pyarrow does not know ALP (encoding 10) and names it UNKNOWN
+    found = {md.column(i).path_in_schema: set(md.column(i).encodings) for i in range(md.num_columns)}
+    assert "DELTA_BINARY_PACKED" in found["i64"]
+    assert "RLE_DICTIONARY" in found["i32"]
+    assert "RLE_DICTIONARY" not in found["f64"] | found["f32"]
+    assert ppc.read_table(path).equals(numbers)
+    with ppc.Writer(tmp_path / "w.parquet", numbers.schema, policy="base", encodings={"f64": "ALP"}) as w:
+        w.write(numbers)
+    assert ppc.read_table(tmp_path / "w.parquet").equals(numbers)
+    import polars as pl
+
+    import tparquet.pandas as ppd
+    import tparquet.polars as ppl
+
+    pandas_out, polars_out = tmp_path / "pandas.parquet", tmp_path / "polars.parquet"
+    bss = {"f64": "BYTE_STREAM_SPLIT"}
+    ppd.to_parquet(numbers.to_pandas(), pandas_out, policy="base", encodings=bss)
+    ppl.write_parquet(pl.DataFrame(numbers), polars_out, policy="base", encodings=bss)
+    for out in (pandas_out, polars_out):
+        assert "BYTE_STREAM_SPLIT" in pq.ParquetFile(out).metadata.row_group(0).column(3).encodings, out
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
@@ -93,6 +121,9 @@ def test_row_group_size(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
         ({"base": "zstd(99)"}, "zstd"),
         ({"base": "nope"}, "nope"),
         ({"row_group_size": 0}, "row_group_size"),
+        ({"encodings": {"nope": "PLAIN"}}, "no column named"),
+        ({"encodings": {"f64": "FAST"}}, "FAST"),
+        ({"encodings": {"f64": "RLE_DICTIONARY"}}, "dictionary encoding"),
     ],
 )
 def test_bad_write_options(tmp_path: pathlib.Path, numbers: pa.Table, kwargs: dict[str, object], message: str) -> None:
@@ -596,7 +627,14 @@ def test_public_defaults() -> None:
             if v.default is not inspect.Parameter.empty
         }
 
-    write = {"policy": "auto", "columns": None, "level": 8, "base": "zstd(3)", "row_group_size": None}
+    write = {
+        "policy": "auto",
+        "columns": None,
+        "level": 8,
+        "base": "zstd(3)",
+        "row_group_size": None,
+        "encodings": None,
+    }
     assert defaults(ppc.write_table) == write
     assert defaults(ppc.Writer) == write
     assert defaults(ppd.to_parquet) == {"index": None, **write}

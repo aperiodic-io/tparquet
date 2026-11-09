@@ -16,15 +16,19 @@ def m(rows: int, z9: int, tpq: int, codecs: dict[str, str] | None = None) -> Mea
         arrow_bytes=z9 * 10,
         zstd9_bytes=z9,
         tuned_bytes=z9 * 4 // 5,
+        alp_bytes=z9 * 3 // 4,
         tparquet_bytes=tpq,
         write_s_zstd9=2.0,
         write_s_tuned=1.5,
+        write_s_alp=1.25,
         write_s_tparquet=1.0,
         read_s_zstd9=0.5,
         read_s_tuned=0.5,
+        read_s_alp=0.4,
         read_s_tparquet=0.25,
         codecs=codecs or {"ts": "PCODEC", "price": "PCODEC", "side": "ZSTD"},
         encodings={"ts": "DELTA_BINARY_PACKED", "price": "dictionary", "side": "dictionary"},
+        alp_encodings={"ts": "DELTA_BINARY_PACKED", "price": "ALP", "side": "dictionary"},
     )
 
 
@@ -66,41 +70,41 @@ def test_unknown_group_is_refused() -> None:
 
 def test_markdown() -> None:
     assert report.markdown(ENTRIES) == (
-        "| Data type | Datasets | Rows | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) | tparquet / tuned |\n"
-        "|---|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| Trades | 2 | 2,501,500 | 3.60 GB | 2.88 GB | 1.60 GB | **0.444×** | **0.556×** |\n"
-        "| Quotes (L1, top of book) | 1 | 1,000,000 | 12.0 MB | 9.6 MB | 6.0 MB | **0.500×** | **0.625×** |\n"
-        "| **All** | 3 | 3,501,500 | 3.61 GB | 2.89 GB | 1.61 GB | **0.445×** | **0.556×** |\n"
+        "| Data type | Datasets | Rows | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | tparquet / ZSTD(9) | tparquet / tuned | tparquet / ALP |\n"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        "| Trades | 2 | 2,501,500 | 3.60 GB | 2.88 GB | 2.70 GB | 1.60 GB | **0.444×** | **0.556×** | **0.593×** |\n"
+        "| Quotes (L1, top of book) | 1 | 1,000,000 | 12.0 MB | 9.6 MB | 9.0 MB | 6.0 MB | **0.500×** | **0.625×** | **0.667×** |\n"
+        "| **All** | 3 | 3,501,500 | 3.61 GB | 2.89 GB | 2.71 GB | 1.61 GB | **0.445×** | **0.556×** | **0.593×** |\n"
         "\n"
         "Speed, in MB/s of Arrow data (the columns' size in memory):\n"
         "\n"
-        "| Data type | Arrow data | Write ZSTD(9) | Write tuned | Write tparquet | Read ZSTD(9) | Read tuned | Read tparquet |\n"
-        "|---|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| Trades | 36.00 GB | 9,001 | 12,001 | 18,002 | 36,004 | 36,004 | 72,008 |\n"
-        "| Quotes (L1, top of book) | 120.0 MB | 60 | 80 | 120 | 240 | 240 | 480 |\n"
-        "| **All** | 36.12 GB | 6,021 | 8,028 | 12,041 | 24,083 | 24,083 | 48,165 |\n"
+        "| Data type | Arrow data | Write ZSTD(9) | Write tuned | Write ALP | Write tparquet | Read ZSTD(9) | Read tuned | Read ALP | Read tparquet |\n"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        "| Trades | 36.00 GB | 9,001 | 12,001 | 14,402 | 18,002 | 36,004 | 36,004 | 45,005 | 72,008 |\n"
+        "| Quotes (L1, top of book) | 120.0 MB | 60 | 80 | 96 | 120 | 240 | 240 | 300 | 480 |\n"
+        "| **All** | 36.12 GB | 6,021 | 8,028 | 9,633 | 12,041 | 24,083 | 24,083 | 30,103 | 48,165 |\n"
         "\n"
         "### Trades\n"
         "\n"
-        "| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) | tparquet / tuned | PCODEC columns |\n"
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n"
-        "| Tardis.dev | BTCUSDT trades | 1,500 | 999 B | 400 KB | 320 KB | 100 KB | 0.250× | 0.312× | 2 of 3 |\n"
-        "| NYSE | TAQ trades | 2,500,000 | 13.0 MB | 3.60 GB | 2.88 GB | 1.60 GB | 0.444× | 0.556× | 2 of 3 |\n"
+        "| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | tparquet / ZSTD(9) | tparquet / tuned | tparquet / ALP | ALP columns | PCODEC columns |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n"
+        "| Tardis.dev | BTCUSDT trades | 1,500 | 999 B | 400 KB | 320 KB | 300 KB | 100 KB | 0.250× | 0.312× | 0.333× | 1 of 3 | 2 of 3 |\n"
+        "| NYSE | TAQ trades | 2,500,000 | 13.0 MB | 3.60 GB | 2.88 GB | 2.70 GB | 1.60 GB | 0.444× | 0.556× | 0.593× | 1 of 3 | 2 of 3 |\n"
         "\n"
-        "| Provider | Data | Arrow data | Write ZSTD(9) | Write tuned | Write tparquet | Read ZSTD(9) | Read tuned | Read tparquet |\n"
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| Tardis.dev | BTCUSDT trades | 4.0 MB | 2 | 3 | 4 | 8 | 8 | 16 |\n"
-        "| NYSE | TAQ trades | 36.00 GB | 18,000 | 24,000 | 36,000 | 72,000 | 72,000 | 144,000 |\n"
+        "| Provider | Data | Arrow data | Write ZSTD(9) | Write tuned | Write ALP | Write tparquet | Read ZSTD(9) | Read tuned | Read ALP | Read tparquet |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        "| Tardis.dev | BTCUSDT trades | 4.0 MB | 2 | 3 | 3 | 4 | 8 | 8 | 10 | 16 |\n"
+        "| NYSE | TAQ trades | 36.00 GB | 18,000 | 24,000 | 28,800 | 36,000 | 72,000 | 72,000 | 90,000 | 144,000 |\n"
         "\n"
         "### Quotes (L1, top of book)\n"
         "\n"
-        "| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) | tparquet / tuned | PCODEC columns |\n"
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n"
-        "| Tardis.dev | BTCUSDT quotes | 1,000,000 | 17.8 MB | 12.0 MB | 9.6 MB | 6.0 MB | 0.500× | 0.625× | 2 of 3 |\n"
+        "| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | tparquet / ZSTD(9) | tparquet / tuned | tparquet / ALP | ALP columns | PCODEC columns |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n"
+        "| Tardis.dev | BTCUSDT quotes | 1,000,000 | 17.8 MB | 12.0 MB | 9.6 MB | 9.0 MB | 6.0 MB | 0.500× | 0.625× | 0.667× | 1 of 3 | 2 of 3 |\n"
         "\n"
-        "| Provider | Data | Arrow data | Write ZSTD(9) | Write tuned | Write tparquet | Read ZSTD(9) | Read tuned | Read tparquet |\n"
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|\n"
-        "| Tardis.dev | BTCUSDT quotes | 120.0 MB | 60 | 80 | 120 | 240 | 240 | 480 |\n"
+        "| Provider | Data | Arrow data | Write ZSTD(9) | Write tuned | Write ALP | Write tparquet | Read ZSTD(9) | Read tuned | Read ALP | Read tparquet |\n"
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        "| Tardis.dev | BTCUSDT quotes | 120.0 MB | 60 | 80 | 96 | 120 | 240 | 240 | 300 | 480 |\n"
     )
 
 
@@ -124,17 +128,22 @@ def test_json_round_trips_every_field() -> None:
             "arrow_bytes": 120_000_000,
             "zstd9_bytes": 12_000_000,
             "tuned_bytes": 9_600_000,
+            "alp_bytes": 9_000_000,
             "tparquet_bytes": 6_000_000,
             "ratio": 0.5,
             "ratio_tuned": 0.625,
+            "ratio_alp": 6_000_000 / 9_000_000,
             "write_s_zstd9": 2.0,
             "write_s_tuned": 1.5,
+            "write_s_alp": 1.25,
             "write_s_tparquet": 1.0,
             "read_s_zstd9": 0.5,
             "read_s_tuned": 0.5,
+            "read_s_alp": 0.4,
             "read_s_tparquet": 0.25,
             "codecs": {"ts": "PCODEC", "price": "PCODEC", "side": "ZSTD"},
             "tuned_encodings": {"ts": "DELTA_BINARY_PACKED", "price": "dictionary", "side": "dictionary"},
+            "alp_encodings": {"ts": "DELTA_BINARY_PACKED", "price": "ALP", "side": "dictionary"},
         }
     ]
 

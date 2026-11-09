@@ -425,3 +425,54 @@ fn base_codecs_parse_or_fail_cleanly() {
     assert_eq!(message("zstd(x)"), "base codec \"zstd(x)\": Parquet error: invalid compression level: x)");
     assert!(message("nope").contains("unsupported compression nope"));
 }
+
+/// The encodings of every column chunk of the first row group, by leaf path.
+fn encodings(file: &bytes::Bytes) -> Vec<(String, Vec<String>)> {
+    use tparquet::parquet::file::reader::{FileReader, SerializedFileReader};
+    let reader = SerializedFileReader::new(file.clone()).unwrap();
+    let rg = reader.metadata().row_group(0);
+    rg.columns().iter().map(|c| (c.column_path().string(), c.encodings().map(|e| e.to_string()).collect())).collect()
+}
+
+#[test]
+fn column_encodings_apply_to_base_columns() {
+    use tparquet::parquet::basic::Encoding;
+    let batch = mixed(N, 9);
+    let options = WriterOptions::default()
+        .with_policy(Policy::Base)
+        .with_encoding("price", Encoding::ALP)
+        .with_encoding("ts", Encoding::DELTA_BINARY_PACKED);
+    let (file, _) = write(std::slice::from_ref(&batch), options);
+    let e = encodings(&file);
+    assert!(e[0].1.contains(&"DELTA_BINARY_PACKED".to_string()), "{e:?}");
+    assert!(e[1].1.contains(&"ALP".to_string()), "{e:?}");
+    // the others keep the dictionary
+    assert!(e[2].1.contains(&"RLE_DICTIONARY".to_string()), "{e:?}");
+    assert!(!e[1].1.contains(&"RLE_DICTIONARY".to_string()), "{e:?}");
+    assert_eq!(lines(&file), batch_lines(&[batch]));
+}
+
+#[test]
+fn pcodec_columns_ignore_their_encoding() {
+    use tparquet::parquet::basic::Encoding;
+    let batch = mixed(N, 10);
+    let options = WriterOptions::default().with_policy(Policy::Pcodec).with_encoding("price", Encoding::ALP);
+    let (file, _) = write(std::slice::from_ref(&batch), options);
+    let e = encodings(&file);
+    assert!(e[1].1.iter().all(|e| e == "PLAIN" || e == "RLE"), "{e:?}");
+    assert_eq!(lines(&file), batch_lines(&[batch]));
+}
+
+#[test]
+fn bad_column_encodings_are_errors() {
+    use tparquet::parquet::basic::Encoding;
+    let schema = mixed(1, 0).schema();
+    let error = |o: WriterOptions| Writer::try_new(Vec::new(), schema.clone(), o).err().unwrap().to_string();
+    assert_eq!(error(WriterOptions::default().with_encoding("nope", Encoding::PLAIN)), "no column named \"nope\"");
+    for e in [Encoding::PLAIN_DICTIONARY, Encoding::RLE_DICTIONARY] {
+        assert_eq!(
+            error(WriterOptions::default().with_encoding("price", e)),
+            format!("{e} is a dictionary encoding: the dictionary is the writer's default")
+        );
+    }
+}

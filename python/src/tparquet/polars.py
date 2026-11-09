@@ -41,6 +41,7 @@ def write_parquet(
     # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
     base: str = "zstd(3)",  # pragma: no mutate
     row_group_size: int | None = None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Writes a DataFrame (or the result of a LazyFrame) with PCODEC where the policy selects
     it; the options are those of `tparquet.write_table`. Returns the codec of every
@@ -49,7 +50,16 @@ def write_parquet(
         df = df.collect()
     if not isinstance(df, pl.DataFrame):
         raise TypeError(f"expected a Polars DataFrame or LazyFrame, got {type(df).__name__}")
-    return write_table(df, sink, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size)
+    return write_table(
+        df,
+        sink,
+        policy=policy,
+        columns=columns,
+        level=level,
+        base=base,
+        row_group_size=row_group_size,
+        encodings=encodings,
+    )
 
 
 def _get(node: Any, *keys: str) -> Any:

@@ -134,9 +134,15 @@ def _names(columns: Sequence[str] | None) -> list[str] | None:
 
 
 def _options(
-    policy: Policy, columns: Mapping[str, Policy] | None, level: int, base: str, row_group_size: int | None
+    policy: Policy,
+    columns: Mapping[str, Policy] | None,
+    level: int,
+    base: str,
+    row_group_size: int | None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
+        "encodings": dict(encodings or {}),
         "policy": policy,
         "columns": dict(columns or {}),
         "level": _int("level", level),
@@ -332,7 +338,10 @@ class Writer:
     base codec is smaller on the first batch with rows; `"pcodec"` and `"base"` force one.
     `columns` maps a top-level name or a dotted leaf path to its own policy. `level` is the
     pcodec level (0 to 12), `base` the codec of the other columns (`"zstd(3)"`, `"snappy"`,
-    `"uncompressed"`...), and `row_group_size` the most rows per row group.
+    `"uncompressed"`...), and `row_group_size` the most rows per row group. `encodings` maps a
+    column, named as in `columns`, to the Parquet encoding it is written with when it gets the
+    base codec (`"ALP"`, `"BYTE_STREAM_SPLIT"`, `"DELTA_BINARY_PACKED"`...), without a
+    dictionary; PCODEC columns are always PLAIN.
     """
 
     def __init__(
@@ -345,10 +354,11 @@ class Writer:
         # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
         base: str = "zstd(3)",  # pragma: no mutate
         row_group_size: int | None = None,
+        encodings: Mapping[str, str] | None = None,
     ) -> None:
         target = _sink(sink)
         capsule = _schema_capsule(schema)
-        self._writer = _lib.Writer(target, capsule, _options(policy, columns, level, base, row_group_size))
+        self._writer = _lib.Writer(target, capsule, _options(policy, columns, level, base, row_group_size, encodings))
 
     def write(self, data: ArrowData) -> None:
         """Writes a table, a record batch, or any object with `__arrow_c_stream__` or
@@ -414,6 +424,7 @@ def write_table(
     # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
     base: str = "zstd(3)",  # pragma: no mutate
     row_group_size: int | None = None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Writes Arrow data to a Parquet file with PCODEC where the policy selects it.
 
@@ -423,7 +434,7 @@ def write_table(
     """
     first, second = _capsules(data)
     target = _sink(sink)
-    options = _options(policy, columns, level, base, row_group_size)
+    options = _options(policy, columns, level, base, row_group_size, encodings)
     if second is None:
         return _lib.write_stream(target, first, options)
     writer = _lib.Writer(target, first, options)
