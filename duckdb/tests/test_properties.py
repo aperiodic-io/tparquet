@@ -99,7 +99,12 @@ def values(t: pa.DataType):
     elif pa.types.is_struct(t):
         v = st.fixed_dictionaries({t.field(i).name: values(t.field(i).type) for i in range(t.num_fields)})
     elif pa.types.is_map(t):
-        v = st.lists(st.tuples(values(t.key_type).filter(lambda k: k is not None), values(t.item_type)), max_size=3)
+        # map keys are unique (DuckDB refuses a map that repeats one, as read_parquet does)
+        v = st.lists(
+            st.tuples(values(t.key_type).filter(lambda k: k is not None), values(t.item_type)),
+            max_size=3,
+            unique_by=lambda kv: kv[0],
+        )
     else:
         raise AssertionError(t)
     return st.one_of(st.none(), v)
