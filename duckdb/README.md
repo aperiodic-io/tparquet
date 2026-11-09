@@ -233,6 +233,11 @@ given; the C API v2 build sets the extension `parquet` (`duckdb_v2_copy_function
 `FILE_SIZE_BYTES` is refused by DuckDB for this format. A query that fails midway leaves no
 file, and an existing file at the path is kept (DuckDB writes to a temporary file first).
 
+**Local files only.** `COPY ... TO` writes with `std::fs` in both builds, not through DuckDB's
+file system as `read_tparquet` reads: a remote destination (`s3://`, `https://`, a registered
+file system) fails with `cannot create ...`. Write locally and upload, or write a standard
+Parquet file with `FORMAT parquet` and transcode it.
+
 **Order.** The C API sets no parallel execution mode for COPY functions, so DuckDB calls the
 sink from one thread at a time, in the query's order; the conversion of DuckDB vectors to Arrow
 runs in that thread.

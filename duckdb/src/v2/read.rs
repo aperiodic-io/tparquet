@@ -154,8 +154,18 @@ fn filter_impl(info: s::duckdb_v2_table_function_filter_pushdown_info_handle) ->
         // never accepted: DuckDB keeps filtering the rows, the predicates only skip row groups
         found.extend(filter::predicate(e, &columns));
     }
-    bind.predicates.lock().map_err(|_| "poisoned")?.extend(found);
+    add_predicates(&mut *bind.predicates.lock().map_err(|_| "poisoned")?, found);
     Ok(())
+}
+
+/// Adds the predicates of a filter pushdown to those of earlier ones, each once: DuckDB may offer
+/// the same filters again, and every predicate is checked against every row group.
+fn add_predicates(kept: &mut Vec<Predicate>, found: Vec<Predicate>) {
+    for p in found {
+        if !kept.contains(&p) {
+            kept.push(p);
+        }
+    }
 }
 
 unsafe extern "C" fn filter_pushdown(
@@ -424,6 +434,17 @@ pub fn register(extension: s::duckdb_v2_extension_handle, context: s::duckdb_v2_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pushdown_adds_only_predicates_it_does_not_have() {
+        use crate::prune::{Op, Scalar};
+        let p = |v| Predicate::Compare { column: 0, op: Op::Lt, value: Scalar::Int(v) };
+        let mut kept = vec![p(1)];
+        add_predicates(&mut kept, vec![p(1), p(2), p(2)]);
+        assert_eq!(kept, vec![p(1), p(2)]);
+        add_predicates(&mut kept, vec![p(1), p(2)]);
+        assert_eq!(kept, vec![p(1), p(2)]);
+    }
 
     #[test]
     fn plain_types_lose_field_metadata_at_any_depth() {

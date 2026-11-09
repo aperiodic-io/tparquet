@@ -27,10 +27,21 @@ pub fn with_context<T>(context: s::duckdb_v2_context_handle, f: impl FnOnce() ->
     if call!(duckdb_v2_context_get_file_system(context, &mut fs)).is_err() {
         fs = std::ptr::null_mut();
     }
-    let before = CURRENT.with(|c| c.replace(fs));
-    let out = f();
-    CURRENT.with(|c| c.set(before));
-    out
+    with_file_system(fs, f)
+}
+
+/// Runs `f` with `fs` as the current file system of this thread; the previous one is back when
+/// `f` returns or panics (a panic is caught later by the callback's guard, and the borrowed
+/// file system must not outlive the callback).
+fn with_file_system<T>(fs: s::duckdb_v2_file_system_handle, f: impl FnOnce() -> T) -> T {
+    struct Restore(s::duckdb_v2_file_system_handle);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(CURRENT.with(|c| c.replace(fs)));
+    f()
 }
 
 fn current() -> Result<s::duckdb_v2_file_system_handle, String> {
@@ -146,6 +157,26 @@ impl RandomAccess for DuckFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_file_system_of_a_callback_ends_with_it_even_when_it_panics() {
+        let fs = 0x10 as s::duckdb_v2_file_system_handle;
+        assert!(current().is_err());
+        let r = std::panic::catch_unwind(|| {
+            with_file_system(fs, || {
+                assert_eq!(current(), Ok(fs));
+                panic!("in a callback")
+            })
+        });
+        assert!(r.is_err());
+        assert!(current().is_err(), "the borrowed file system outlived its callback");
+        // nested scopes restore the outer one
+        with_file_system(fs, || {
+            with_file_system(std::ptr::null_mut(), || assert!(current().is_err()));
+            assert_eq!(current(), Ok(fs));
+        });
+        assert!(current().is_err());
+    }
 
     #[test]
     fn glob_results_keep_the_spelling_of_the_pattern() {
