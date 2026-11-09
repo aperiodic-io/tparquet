@@ -30,6 +30,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -66,11 +67,20 @@ def compare(name: str, got: str, want: str) -> None:
             raise Mismatch(f"{name}: line {i + 1} differs from expected/{name}.jsonl")
 
 
-def check(src: pathlib.Path, read: Callable[[pathlib.Path], str]) -> int:
+def check(src: pathlib.Path, read: Callable[[pathlib.Path], str | None]) -> int:
+    """Compares every vector `read` reads; `read` gives None for a vector its reader cannot
+    represent (counted and named as skipped)."""
     n = 0
+    skipped = []
     for name, f, expected in vectors(src):
-        compare(name, read(f), expected.read_text(encoding="utf-8"))
+        got = read(f)
+        if got is None:
+            skipped.append(name)
+            continue
+        compare(name, got, expected.read_text(encoding="utf-8"))
         n += 1
+    if skipped:
+        print(f"skipped {len(skipped)}: {', '.join(skipped)}", file=sys.stderr)
     return n
 
 
@@ -104,8 +114,37 @@ def duckdb_reader(extension: str) -> Callable[[pathlib.Path], str]:
     from canonical import lines  # duckdb/tests/canonical.py
 
     con = duckdb_connect(extension)
-    # canonical.lines gives the whole text, one row per line
-    return lambda f: lines(con.sql(scan(f)).to_arrow_table(), pq.read_schema(f))
+    version = con.execute("SELECT library_version FROM pragma_version()").fetchall()[0][0]
+
+    def read(f: pathlib.Path) -> str | None:
+        schema = pq.read_schema(f)
+        # DuckDB 1.x has no TIMESTAMP WITH TIME ZONE in nanoseconds: it reads such a column as
+        # microseconds, as its own read_parquet does (duckdb/README.md, Limitations)
+        if version.startswith("v1.") and any(
+            pa.types.is_timestamp(t) and t.unit == "ns" and t.tz is not None for t in leaf_types(schema)
+        ):
+            return None
+        # canonical.lines gives the whole text, one row per line
+        return lines(con.sql(scan(f)).to_arrow_table(), schema)
+
+    return read
+
+
+def leaf_types(schema):
+    def leaves(t):
+        if pa.types.is_struct(t):
+            for i in range(t.num_fields):
+                yield from leaves(t.field(i).type)
+        elif pa.types.is_map(t):
+            yield from leaves(t.key_type)
+            yield from leaves(t.item_type)
+        elif pa.types.is_list(t) or pa.types.is_large_list(t) or pa.types.is_fixed_size_list(t):
+            yield from leaves(t.value_type)
+        else:
+            yield t
+
+    for field in schema:
+        yield from leaves(field.type)
 
 
 def fresh(out: pathlib.Path) -> None:
@@ -169,18 +208,17 @@ def write_duckdb(extension: str, out: pathlib.Path, sources: list[pathlib.Path])
                 if name in DUCKDB_ORACLE_LOSES_NAN_PAYLOADS:
                     continue
                 q = scan(f)
-                cols = ", ".join("'" + c.replace("'", "''") + "'" for c in con.sql(q).columns)
                 standard = pathlib.Path(tmp) / f"{name}.parquet"
                 con.execute(f"COPY ({q}) TO '{standard}' (FORMAT parquet)")
                 rows = joined(canonical.lines(pq.read_table(standard)))
                 for suffix, options in [
                     ("", ""),
-                    ("__pcodec", f", POLICY 'pcodec', LEVEL 3, ROW_GROUP_ROWS {ROW_GROUP}"),
-                    ("__base", f", POLICY 'base', COMPRESSION 'snappy', ROW_GROUP_ROWS {ROW_GROUP}"),
+                    ("__pcodec", f", COMPRESSION pcodec, COMPRESSION_LEVEL 3, ROW_GROUP_SIZE {ROW_GROUP}"),
+                    ("__base", f", COMPRESSION snappy, ROW_GROUP_SIZE {ROW_GROUP}"),
                 ]:
                     con.execute(
                         f"COPY ({q}) TO '{out / 'files' / f'{name}{suffix}.parquet'}' "
-                        f"(FORMAT tparquet, COLUMN_NAMES [{cols}]{options})"
+                        f"(FORMAT tparquet{options})"
                     )
                     (out / "expected" / f"{name}{suffix}.jsonl").write_text(rows, encoding="utf-8")
                     n += 1

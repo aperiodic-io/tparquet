@@ -1,0 +1,185 @@
+{
+  "comment": "Hand-picked mutations of the fork's changes (duckdb/FORK.md), applied one at a time to target/duckdb/VERSION/src by duckdb/mutation/run.py. Each `old` must occur exactly once in its file; `versions` lists the DuckDB versions whose patch has it (default: every version). Every item the patches add or change has at least one mutant, but for EnumUtil::ToChars and FromString<CompressionCodec> (used only when DuckDB serializes and deserializes a COPY plan, which SQL cannot ask for; tparquet_metadata names the codec through Thrift's table), the skipped registrations (deleting a line: nothing to mutate) and the CMake changes (without them the extension does not build), and the check of pcp_compress's return code in ColumnWriter::CompressPage: pcp_compress fails only on a bad argument (a level outside 0..12, which the bind refuses; a buffer below pcp_compress_bound, which is what the writer allocates) or an internal panic, so no SQL reaches the error, and the check stays so that a failure is an error, never a corrupt page.",
+  "mutants": [
+    {
+      "id": "thrift-pcodec-unknown",
+      "file": "third_party/parquet/parquet_types.cpp",
+      "old": "TEnumIterator(9, _kCompressionCodecValues",
+      "new": "TEnumIterator(8, _kCompressionCodecValues"
+    },
+    {
+      "id": "thrift-pcodec-other-id",
+      "file": "third_party/parquet/parquet_types.h",
+      "old": "    PCODEC = 20547 // tparquet: spec/FORMAT.md",
+      "new": "    PCODEC = 20548 // tparquet: spec/FORMAT.md"
+    },
+    {
+      "id": "decompress-ignores-errors",
+      "file": "extension/parquet/column_reader.cpp",
+      "old": "\t\tif (pcp_decompress(src, src_size, dst, dst_size) != PCP_OK) {",
+      "new": "\t\tif (pcp_decompress(src, src_size, dst, dst_size) != PCP_OK && false) {"
+    },
+    {
+      "id": "decompress-one-byte-short",
+      "file": "extension/parquet/column_reader.cpp",
+      "old": "\t\tif (pcp_decompress(src, src_size, dst, dst_size) != PCP_OK) {",
+      "new": "\t\tif (pcp_decompress(src, src_size, dst, dst_size - 1) != PCP_OK) {"
+    },
+    {
+      "id": "decompress-no-message",
+      "file": "extension/parquet/column_reader.cpp",
+      "old": "\t\t\tpcp_last_error(message, sizeof(message));",
+      "new": "\t\t\tmessage[0] = 0;"
+    },
+    {
+      "id": "compress-file-codec",
+      "file": "extension/parquet/column_writer.cpp",
+      "old": "\tswitch (writer.GetCodec(SchemaIndex())) {",
+      "new": "\tswitch (writer.GetCodec()) {"
+    },
+    {
+      "id": "compress-no-type-hint",
+      "file": "extension/parquet/column_writer.cpp",
+      "old": "\t\tif (pcp_compress(temp_writer.GetData(), temp_writer.GetPosition(), writer.GetType(SchemaIndex()),",
+      "new": "\t\tif (pcp_compress(temp_writer.GetData(), temp_writer.GetPosition(), -1,"
+    },
+    {
+      "id": "compress-no-level",
+      "file": "extension/parquet/column_writer.cpp",
+      "old": "\t\t                 UnsafeNumericCast<int32_t>(writer.CompressionLevel()), 1, compressed_buf.get(), compressed_size,",
+      "new": "\t\t                 -1, 1, compressed_buf.get(), compressed_size,"
+    },
+    {
+      "id": "compress-no-decimal",
+      "file": "extension/parquet/column_writer.cpp",
+      "old": "\t\t                 UnsafeNumericCast<int32_t>(writer.CompressionLevel()), 1, compressed_buf.get(), compressed_size,",
+      "new": "\t\t                 UnsafeNumericCast<int32_t>(writer.CompressionLevel()), 0, compressed_buf.get(), compressed_size,"
+    },
+    {
+      "id": "zstd-columns-take-the-pcodec-level",
+      "file": "extension/parquet/column_writer.cpp",
+      "old": "\t\tauto level = writer.GetCodec() == CompressionCodec::PCODEC ? ZStdFileSystem::DefaultCompressionLevel()",
+      "new": "\t\tauto level = writer.GetCodec() != CompressionCodec::PCODEC ? ZStdFileSystem::DefaultCompressionLevel()"
+    },
+    {
+      "id": "codec-pcodec-for-every-column",
+      "file": "extension/parquet/include/parquet_writer.hpp",
+      "old": "\t\tdefault:\n\t\t\treturn duckdb_parquet::CompressionCodec::ZSTD;",
+      "new": "\t\tdefault:\n\t\t\treturn duckdb_parquet::CompressionCodec::PCODEC;"
+    },
+    {
+      "id": "codec-double-gets-zstd",
+      "file": "extension/parquet/include/parquet_writer.hpp",
+      "old": "\t\tcase duckdb_parquet::Type::DOUBLE:\n\t\t\treturn duckdb_parquet::CompressionCodec::PCODEC;",
+      "new": "\t\tcase duckdb_parquet::Type::DOUBLE:\n\t\t\treturn duckdb_parquet::CompressionCodec::ZSTD;"
+    },
+    {
+      "id": "codec-int32-gets-zstd",
+      "file": "extension/parquet/include/parquet_writer.hpp",
+      "old": "\t\tcase duckdb_parquet::Type::INT32:\n\t\tcase duckdb_parquet::Type::INT64:",
+      "new": "\t\tcase duckdb_parquet::Type::BOOLEAN:\n\t\tcase duckdb_parquet::Type::INT64:"
+    },
+    {
+      "id": "chunk-codec-of-the-file",
+      "file": "extension/parquet/writer/primitive_column_writer.cpp",
+      "old": "\tcolumn_chunk.meta_data.codec = writer.GetCodec(SchemaIndex());",
+      "new": "\tcolumn_chunk.meta_data.codec = writer.GetCodec();"
+    },
+    {
+      "id": "pcodec-columns-keep-dictionaries",
+      "file": "extension/parquet/include/writer/templated_column_writer.hpp",
+      "old": "\t\tif (writer.GetCodec(SchemaIndex()) == duckdb_parquet::CompressionCodec::PCODEC) {",
+      "new": "\t\tif (writer.GetCodec(SchemaIndex()) == duckdb_parquet::CompressionCodec::PCODEC && false) {"
+    },
+    {
+      "id": "pcodec-columns-delta-encoded",
+      "file": "extension/parquet/include/writer/templated_column_writer.hpp",
+      "old": "\t\t\tstate.dictionary.Reset();\n\t\t\tstate.encoding = duckdb_parquet::Encoding::PLAIN;\n\t\t\treturn;",
+      "new": "\t\t\tstate.dictionary.Reset();\n\t\t\tstate.encoding = duckdb_parquet::Encoding::DELTA_BINARY_PACKED;\n\t\t\treturn;"
+    },
+    {
+      "id": "no-footer-key",
+      "file": "extension/parquet/parquet_writer.cpp",
+      "old": "\t\tkv.__set_key(\"parquet.pcodec.version\");",
+      "new": "\t\tkv.__set_key(\"parquet.pcodec.versio\");"
+    },
+    {
+      "id": "footer-key-on-other-codecs",
+      "file": "extension/parquet/parquet_writer.cpp",
+      "versions": [
+        "2.0.0"
+      ],
+      "old": "\tif (options.codec == duckdb_parquet::CompressionCodec::PCODEC) { // tparquet: spec/FORMAT.md section 2",
+      "new": "\tif (options.codec != duckdb_parquet::CompressionCodec::PCODEC) { // tparquet: spec/FORMAT.md section 2"
+    },
+    {
+      "id": "footer-key-on-other-codecs-1.5",
+      "file": "extension/parquet/parquet_writer.cpp",
+      "versions": [
+        "1.5.6"
+      ],
+      "old": "\tif (codec == duckdb_parquet::CompressionCodec::PCODEC) { // tparquet: spec/FORMAT.md section 2",
+      "new": "\tif (codec != duckdb_parquet::CompressionCodec::PCODEC) { // tparquet: spec/FORMAT.md section 2"
+    },
+    {
+      "id": "default-codec-snappy",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\tduckdb_parquet::CompressionCodec::type codec = duckdb_parquet::CompressionCodec::PCODEC; // tparquet",
+      "new": "\tduckdb_parquet::CompressionCodec::type codec = duckdb_parquet::CompressionCodec::SNAPPY; // tparquet"
+    },
+    {
+      "id": "option-pcodec-unknown",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\t\t\t} else if (roption == \"pcodec\") { // tparquet",
+      "new": "\t\t\t} else if (roption == \"pcodec \") { // tparquet"
+    },
+    {
+      "id": "default-level-0",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\t\t\tbind_data->compression_level = -1; // PCODEC's default (8)",
+      "new": "\t\t\tbind_data->compression_level = 0; // PCODEC's default (8)"
+    },
+    {
+      "id": "level-13-accepted",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "bind_data->compression_level > 12) {",
+      "new": "bind_data->compression_level > 13) {"
+    },
+    {
+      "id": "level-minus-1-accepted",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\t\t} else if (bind_data->compression_level < 0 ||",
+      "new": "\t\t} else if (bind_data->compression_level < -1 ||"
+    },
+    {
+      "id": "read-parquet-name",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\tscan_fun.SetName(\"read_tparquet\");",
+      "new": "\tscan_fun.SetName(\"read_parquet\");",
+      "versions": [
+        "2.0.0"
+      ]
+    },
+    {
+      "id": "read-parquet-name-1.5",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "versions": [
+        "1.5.6"
+      ],
+      "old": "\tscan_fun.name = \"read_tparquet\";",
+      "new": "\tscan_fun.name = \"read_parquet\";"
+    },
+    {
+      "id": "metadata-replaces-duckdbs",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\tloader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(meta_fun)));",
+      "new": "\tloader.RegisterFunction(MultiFileReader::CreateFunctionSet(meta_fun));"
+    },
+    {
+      "id": "copy-format-parquet",
+      "file": "extension/parquet/parquet_extension.cpp",
+      "old": "\tCopyFunction function(\"tparquet\");",
+      "new": "\tCopyFunction function(\"parquet\");"
+    }
+  ]
+}

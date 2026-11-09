@@ -1,20 +1,21 @@
 """read_tparquet reads through DuckDB's file system: remote and registered file systems.
 
 Files are served by an fsspec in-memory file system registered with DuckDB (`memory://`) and by
-a local HTTP server read through DuckDB's httpfs (`http://`). Both builds read single files and
-lists; globs over a remote file system need DuckDB's glob, which only the C API v2 has.
+a local HTTP server read through DuckDB's httpfs (`http://`): single files, lists and globs, as
+read_parquet reads them.
 """
 
+import datetime
 import functools
 import http.server
 import os
 import threading
 
-import duckdb
 import pytest
+from conftest import DUCKDB_1, connect, copy_to, rows
 from fsspec.implementations.memory import MemoryFile, MemoryFileSystem
 
-from conftest import API, connect, copy_to, rows
+import duckdb
 
 N = 30_000
 QUERY = f"SELECT i AS id, i * 0.5 AS price, 'sym' || (i % 7) AS sym FROM range({N}) r(i)"
@@ -26,8 +27,8 @@ def local(tmp_path_factory):
     con = connect()
     for part, (lo, hi) in enumerate([(0, 10_000), (10_000, 10_001), (10_001, N)]):
         copy_to(con, f"SELECT * FROM ({QUERY}) WHERE id >= {lo} AND id < {hi}", d / f"part-{part}.parquet",
-                ROW_GROUP_ROWS=2500)
-    copy_to(con, QUERY, d / "all.parquet", ROW_GROUP_ROWS=4000)
+                ROW_GROUP_SIZE=2500)
+    copy_to(con, QUERY, d / "all.parquet", ROW_GROUP_SIZE=4000)
     con.close()
     return d
 
@@ -84,8 +85,9 @@ def test_reads_a_list_of_remote_files_with_filenames_and_row_numbers(mcon):
         "'memory://data/part-0.parquet'], filename := true, file_row_number := true) ORDER BY id",
     )
     assert len(got) == N - 1
-    assert got[0] == ("memory://data/part-0.parquet", 0, 0)
-    assert got[-1] == ("memory://data/part-2.parquet", N - 10_002, N - 1)
+    # DuckDB names fsspec files as fsspec answers them (memory:///data/...)
+    assert got[0] == ("memory:///data/part-0.parquet", 0, 0)
+    assert got[-1] == ("memory:///data/part-2.parquet", N - 10_002, N - 1)
 
 
 def test_remote_and_local_files_mix_in_a_list(mcon, local):
@@ -95,28 +97,24 @@ def test_remote_and_local_files_mix_in_a_list(mcon, local):
 
 def test_globs_over_a_remote_file_system(mcon):
     sql = "SELECT count(*), min(id), max(id) FROM read_tparquet('memory://data/part-*.parquet')"
-    if API == "v2":
-        assert rows(mcon, sql) == [(N, 0, N - 1)]
-        assert rows(mcon, "SELECT DISTINCT filename FROM read_tparquet('memory://data/part-[02].parquet', "
-                          "filename := true) ORDER BY ALL") == [
-            ("memory://data/part-0.parquet",), ("memory://data/part-2.parquet",)]
-        with pytest.raises(duckdb.Error, match=r"no files match \"memory://data/none-\*.parquet\""):
-            rows(mcon, "SELECT * FROM read_tparquet('memory://data/none-*.parquet')")
-    else:
-        with pytest.raises(duckdb.Error, match="globs over remote files need the C API v2 build"):
-            rows(mcon, sql)
+    assert rows(mcon, sql) == [(N, 0, N - 1)]
+    assert rows(mcon, "SELECT DISTINCT filename FROM read_tparquet('memory://data/part-[02].parquet', "
+                      "filename := true) ORDER BY ALL") == [
+        ("memory:///data/part-0.parquet",), ("memory:///data/part-2.parquet",)]
+    with pytest.raises(duckdb.Error, match="No files found"):
+        rows(mcon, "SELECT * FROM read_tparquet('memory://data/none-*.parquet')")
 
 
 def test_a_missing_remote_file_is_named(mcon):
     # with the file system's own error, as DuckDB reports it
     for function in ["read_tparquet", "tparquet_metadata"]:
-        with pytest.raises(duckdb.Error, match=r"(?s)cannot open memory://data/missing.parquet: .*FileNotFoundError"):
+        with pytest.raises(duckdb.Error, match=r"No files found that match the pattern \"memory://data/missing.parquet\""):
             rows(mcon, f"SELECT * FROM {function}('memory://data/missing.parquet')")
 
 
 def test_a_damaged_remote_file_is_named(mcon, memfs):
     memfs.pipe("memory://data/bad.parquet", b"PAR1 not really parquet PAR1")
-    with pytest.raises(duckdb.Error, match="cannot read memory://data/bad.parquet as Parquet"):
+    with pytest.raises(duckdb.Error, match="memory:///data/bad.parquet"):
         rows(mcon, "SELECT * FROM read_tparquet('memory://data/bad.parquet')")
 
 
@@ -138,6 +136,9 @@ class BrokenFileSystem(MemoryFileSystem):
     def _open(self, path, mode="rb", **kwargs):
         return (_Fire if "fire" in path else MemoryFile)(None, None, self.data)
 
+    def modified(self, path):
+        return datetime.datetime(2026, 1, 1)  # DuckDB asks, for its metadata cache
+
     def info(self, path, **kwargs):
         if "nosize" in path:
             raise OSError("no size today")
@@ -155,13 +156,19 @@ def bcon(local):
 @pytest.mark.parametrize("function", ["read_tparquet", "tparquet_metadata"])
 def test_failing_reads_say_why(bcon, function):
     def fails(name, why):
-        with pytest.raises(duckdb.Error, match=rf"(?s)broken://d/{name}\.parquet\b.*: .*{why}"):
+        # DuckDB passes the file system's own error on
+        with pytest.raises(duckdb.Error, match=rf"(?s){why}"):
             rows(bcon, f"SELECT count(*) FROM {function}('broken://d/{name}.parquet')")
 
     fails("fire", "the disk is on fire")
-    fails("nosize", "no size today")
+    # a file without a size is not found (DuckDB's glob asks for it)
+    fails("nosize", 'No files found that match the pattern "broken://d/nosize.parquet"')
     # the footer is read at the listed end, past the last byte
-    fails("short", "the file ends 8 bytes early" if API == "v1" else "only 0 bytes returned")
+    if DUCKDB_1:
+        # DuckDB 1.x reports the read past the end as a file without a footer
+        fails("short", "No magic bytes found at end of file")
+    else:
+        fails("short", r"Failed to read \d+ bytes from Python file at offset \d+: only \d+ bytes returned")
 
 
 def test_copy_from_a_remote_file(mcon):
@@ -250,3 +257,11 @@ def test_reads_over_http_with_httpfs(hcon, http_url, local):
 def test_a_missing_http_file_is_named(hcon, http_url):
     with pytest.raises(duckdb.Error, match=f"{http_url}/missing.parquet"):
         rows(hcon, f"SELECT * FROM read_tparquet('{http_url}/missing.parquet')")
+
+
+def test_copy_to_a_remote_file(mcon, memfs):
+    # DuckDB's Parquet writer writes through DuckDB's file system: object storage included
+    mcon.execute("COPY (SELECT range AS id, range * 0.5 AS x FROM range(10000)) TO 'memory://data/out.parquet' (FORMAT tparquet)")
+    assert memfs.exists("memory://data/out.parquet")
+    assert rows(mcon, "SELECT count(*), sum(id) FROM read_tparquet('memory://data/out.parquet')") == [(10000, 49995000)]
+    assert ("id", "PCODEC") in rows(mcon, "SELECT path_in_schema, compression FROM tparquet_metadata('memory://data/out.parquet')")

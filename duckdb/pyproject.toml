@@ -1,7 +1,7 @@
 [project]
 name = "tparquet-duckdb-tests"
 version = "0.1.0"
-description = "SQL and end-to-end tests of the tparquet DuckDB extension"
+description = "Tests of the tparquet DuckDB extension (DuckDB's parquet extension with PCODEC)"
 requires-python = ">=3.14"
 dependencies = [
     "duckdb==2.0.0",
@@ -17,4 +17,5 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: long tests the mutation run skips (and `make sql` runs)"]
+pythonpath = [".", "tests"]
+markers = ["slow: long tests the mutation run skips"]

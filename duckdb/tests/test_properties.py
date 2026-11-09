@@ -14,12 +14,10 @@ import decimal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
+from canonical import rows_of
+from conftest import DUCKDB_1, connect, copy_to, describe, encode
 from hypothesis import given
 from hypothesis import strategies as st
-
-from canonical import rows_of
-from conftest import connect, copy_to, describe, encode
 
 ints = {
     pa.int8(): (-(2**7), 2**7 - 1),
@@ -135,10 +133,8 @@ write_options = st.fixed_dictionaries(
 
 copy_options = st.fixed_dictionaries(
     {
-        "POLICY": st.sampled_from(["'auto'", "'pcodec'", "'base'"]),
-        "LEVEL": st.integers(0, 12),
-        "ROW_GROUP_ROWS": st.sampled_from([1, 3, 64, 1_000_000]),
-        "COMPRESSION": st.sampled_from(["'zstd'", "'snappy'", "'uncompressed'", "'gzip'", "'lz4'", "'brotli'"]),
+        "COMPRESSION": st.sampled_from(["pcodec", "zstd", "snappy", "uncompressed", "gzip", "lz4", "brotli"]),
+        "ROW_GROUP_SIZE": st.sampled_from([1, 3, 64, 1_000_000]),
     }
 )
 
@@ -178,10 +174,8 @@ def test_read_tparquet_reads_standard_files_as_read_parquet(tmp_path_factory, ta
     write(table, path, options)
     con = connect()
     try:
-        native = describe(con, f"SELECT * FROM read_parquet('{path}')")
-        # read_tparquet keeps millisecond timestamps and fixed-size lists; read_parquet widens them
-        cast = ", ".join(f'"{n}"::{t} AS "{n}"' for n, t in native)
-        assert read(con, f"SELECT {cast} FROM ({in_order(path)})") == read(con, in_order(path, "read_parquet"))
+        assert describe(con, in_order(path)) == describe(con, in_order(path, "read_parquet"))
+        assert read(con, in_order(path)) == read(con, in_order(path, "read_parquet"))
     finally:
         con.close()
 
@@ -195,7 +189,16 @@ def test_copy_writes_what_read_tparquet_reads(tmp_path_factory, table, write_opt
         source = in_order(d / "standard.parquet")
         copy_to(con, source, d / "copy.parquet", **options)
         assert describe(con, f"SELECT * FROM read_tparquet('{d}/copy.parquet')") == describe(con, source)
-        assert read(con, in_order(d / "copy.parquet")) == read(con, source)
+        if DUCKDB_1:
+            # DuckDB 1.x's COPY does not always keep the order of an ordered query (its own
+            # FORMAT parquet neither): the rows are DuckDB's own COPY's, in its order
+            standard = {**options, "COMPRESSION": "zstd" if options["COMPRESSION"] == "pcodec" else options["COMPRESSION"]}
+            opts = "".join(f", {k} {v}" for k, v in standard.items())
+            con.execute(f"COPY ({source}) TO '{d}/own.parquet' (FORMAT parquet{opts})")
+            expected = read(con, in_order(d / "own.parquet", "read_parquet"))
+        else:
+            expected = read(con, source)
+        assert read(con, in_order(d / "copy.parquet")) == expected
     finally:
         con.close()
 
@@ -212,11 +215,8 @@ def test_pcodec_transcodes_read_as_the_original(tmp_path_factory, table, write_o
         con.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="parquet 60.1.0 (vendored as is): a V2 page's FIXED_LEN_BYTE_ARRAY values are checked "
-    "against num_values - num_nulls, and pyarrow's num_nulls leaves out NULLs of list ancestors",
-)
+# DuckDB's reader takes the V2 pages pyarrow writes for FIXED_LEN_BYTE_ARRAY columns under null lists
+# (arrow-rs' parquet 60.1.0 refused them: it checks the values against num_values - num_nulls)
 def test_pyarrow_v2_pages_of_fixed_len_columns_under_null_lists(con, tmp_path):
     t = pa.table({"a": pa.array([None], pa.list_(pa.list_(pa.struct([("d", pa.decimal128(1, 0))]))))})
     pq.write_table(t, tmp_path / "f.parquet", data_page_version="2.0", use_dictionary=False)

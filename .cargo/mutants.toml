@@ -12,45 +12,6 @@ exclude_re = [
     # before the next batch's rows (or by close at the end), with `<=` right away; the file is
     # the same either way (equivalent mutant).
     'rust/tparquet/src/transcode\.rs:.*replace < with <= in transcode',
-    # DuckDB extension. OwnedType::drop destroys a logical type the extension created for a
-    # bind; not destroying it (or destroying only null handles, which
-    # duckdb_destroy_logical_type ignores) leaks a few bytes and changes nothing a query can
-    # observe (equivalent mutants).
-    'duckdb/src/ffi\.rs:.*<impl Drop for OwnedType>::drop',
-    # The same for the handles the C API v2 COPY creates: the copy function after its
-    # registration, and the column data collection of a batch and its scan states once the batch
-    # is converted. Not destroying them leaks memory DuckDB accounts to the database and changes
-    # nothing a query can observe (equivalent mutants).
-    'duckdb/src/v2/copy\.rs:.*<impl Drop for (Function|Collection|SharedScan|WorkerScan)>::drop',
-    # The same for the file systems, open options and file handles of both builds (vfs1, vfs2):
-    # not destroying them leaks, and a file left open changes nothing a query can observe
-    # (equivalent mutants).
-    'duckdb/src/vfs[12]\.rs:.*<impl Drop for (DuckFs|Options|DuckFile)>::drop',
-    # The same for the C API v2 handles of values, logical types, Arrow importers and table
-    # functions (destroying none, or only null handles, leaks; equivalent mutants).
-    'duckdb/src/v2/(sys|read)\.rs:.*<impl Drop for (Value|Type|Importer|Function)>::drop',
-    # Value::val reads VARCHAR values with duckdb_v2_value_get_varchar; without that arm they
-    # fall to duckdb_v2_value_to_string, which renders a VARCHAR as its own text, so the result
-    # is the same. The arm stays because the header calls to_string diagnostic only
-    # (equivalent mutant).
-    'duckdb/src/v2/sys\.rs:.*delete match arm Id::DUCKDB_V2_LOGICAL_TYPE_ID_VARCHAR in Value::val',
-    # v2::filter::predicate reads `column op constant`; scalar() answers None for anything but
-    # a constant as well (duckdb_v2_expression_constant_get_value fails), so the guard only
-    # spares a failing call (equivalent mutant).
-    'duckdb/src/v2/filter\.rs:.*replace match guard constant\(\*b\) with true in predicate',
-    # A decimal constant's 128 bits are `upper << 64 | lower`: the shifted half has no low bits
-    # set, so `|` and `^` give the same number (equivalent mutant).
-    'duckdb/src/v2/filter\.rs:.*replace \| with \^ in scalar',
-    # duckdb_file_system_open sets the file handle exactly when it succeeds, so "failed or no
-    # handle" and "failed and no handle" are the same condition; the handle check only guards
-    # against a DuckDB that broke that contract (equivalent mutant).
-    'duckdb/src/vfs1\.rs:.*replace \|\| with && in <impl FileSystem for DuckFs>::open',
-    # Scan::next skips record batches without rows, because a chunk of 0 rows would end
-    # DuckDB's scan early; the Parquet reader never yields one (not even for a row group
-    # without rows, as in testdata/files/empty.parquet), so `> 0`, `>= 0` and `true` read the
-    # same rows (equivalent mutants).
-    'duckdb/src/scan\.rs:.*replace match guard batch\.num_rows\(\) > 0 with true in Scan::next',
-    'duckdb/src/scan\.rs:.*replace > with >= in Scan::next',
     # JNI binding. The value a native method returns when it has raised a Java exception (the
     # fallback of `run`, -1 for these two) is discarded by the JVM, so deleting its `-` changes
     # nothing Java can observe (equivalent mutants).

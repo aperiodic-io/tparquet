@@ -1,29 +1,23 @@
 """Signed extensions load without allow_unsigned_extensions, from a repository that trusts the key.
 
-The build under test is signed with a new RSA key (`sign.sh`), put in a local extension
+The build under test is signed with a new RSA key (`sign.py`), put in a local extension
 repository (`<prefix>/<DuckDB version>/<platform>/tparquet.duckdb_extension`), and installed and
 loaded from that repository, whose public key DuckDB then trusts. A tampered file, a file signed
 with another key and an unsigned file are refused.
 """
 
-import os
 import pathlib
 import shutil
 import subprocess
+import sys
+
+import pytest
+from conftest import DUCKDB_1, FILES, extension_path, rows
+from sign import signing_hash
 
 import duckdb
-import pytest
-
-from conftest import FILES, extension_path, rows
 
 HERE = pathlib.Path(__file__).resolve().parent
-
-
-def packager() -> str:
-    path = os.environ.get("TPARQUET_DUCKDB_PACKAGER")
-    if not path:
-        raise RuntimeError("set TPARQUET_DUCKDB_PACKAGER to the package-extension binary")
-    return path
 
 
 def keypair(d: pathlib.Path, name: str):
@@ -33,23 +27,22 @@ def keypair(d: pathlib.Path, name: str):
     return private, public.stdout
 
 
+def sign_with(key, ext):
+    return subprocess.run([sys.executable, HERE.parent / "sign.py", key, ext], capture_output=True, text=True)
+
+
 def sign(key, ext):
-    out = subprocess.run(
-        [HERE.parent / "sign.sh", key, ext], env={**os.environ, "PACKAGER": packager()}, capture_output=True, text=True
-    )
+    out = sign_with(key, ext)
     assert out.returncode == 0, out.stderr
     return ext
 
 
 def strict(tmp_path) -> duckdb.DuckDBPyConnection:
     """A database that loads only signed extensions."""
-    return duckdb.connect(
-        config={
-            "allow_unsigned_extensions": "false",
-            "allow_extension_repositories": "allowed",
-            "extension_directory": str(tmp_path / "installed"),
-        }
-    )
+    config = {"allow_unsigned_extensions": "false", "extension_directory": str(tmp_path / "installed")}
+    if not DUCKDB_1:
+        config["allow_extension_repositories"] = "allowed"
+    return duckdb.connect(config=config)
 
 
 def trust(con, repo, key, tmp_path):
@@ -82,6 +75,27 @@ def signed(tmp_path):
     return sign(private, ext), public
 
 
+# DuckDB 1.x trusts only DuckDB's own keys: it has no extension repository with a key of its own
+REPOSITORIES = pytest.mark.skipif(DUCKDB_1, reason="DuckDB 1.x: no extension repository with a public key")
+
+
+def test_the_signature_verifies_with_the_public_key(tmp_path, signed):
+    ext, public = signed
+    data = ext.read_bytes()
+    (tmp_path / "public.pem").write_text(public)
+    (tmp_path / "digest").write_bytes(signing_hash(data))
+    (tmp_path / "signature").write_bytes(data[-256:])
+    out = subprocess.run(
+        ["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", tmp_path / "public.pem", "-pkeyopt", "digest:sha256",
+         "-in", tmp_path / "digest", "-sigfile", tmp_path / "signature"],
+        capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    # the unsigned build carries no signature (DuckDB's 256 zero bytes)
+    assert pathlib.Path(extension_path()).read_bytes()[-256:] == bytes(256)
+
+
+@REPOSITORIES
 def test_a_signed_extension_loads_from_a_repository_that_trusts_its_key(tmp_path, signed):
     ext, public = signed
     con = strict(tmp_path)
@@ -95,6 +109,7 @@ def test_a_signed_extension_loads_from_a_repository_that_trusts_its_key(tmp_path
         forget(con, name)
 
 
+@REPOSITORIES
 def test_the_same_file_unsigned_or_tampered_or_under_another_key_is_refused(tmp_path, signed):
     ext, public = signed
     _, other_public = keypair(tmp_path, "other")
@@ -130,9 +145,7 @@ def test_signing_refuses_a_file_that_is_not_a_packaged_extension(tmp_path):
     private, _ = keypair(tmp_path, "key")
     bogus = tmp_path / "bogus.duckdb_extension"
     bogus.write_bytes(b"not an extension")
-    out = subprocess.run(
-        [HERE.parent / "sign.sh", private, bogus], env={**os.environ, "PACKAGER": packager()}, capture_output=True, text=True
-    )
+    out = sign_with(private, bogus)
     assert out.returncode != 0
     assert "no metadata footer" in out.stderr
     assert bogus.read_bytes() == b"not an extension"
