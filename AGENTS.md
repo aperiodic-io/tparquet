@@ -5,6 +5,8 @@
 | Path | What |
 |---|---|
 | `spec/FORMAT.md` | the file-format specification; the source of truth |
+| `spec/UPSTREAM.md` | draft proposal to make PCODEC a standard Parquet codec |
+| `docs/` | usage guides (`STORAGE-TIER.md`) |
 | `rust/core` | `tparquet-core`: the codec payload (encode, decode), no Parquet dependency |
 | `rust/capi` | C ABI over the core (`include/tparquet.h`), linked by Go and the Arrow C++ fork |
 | `rust/cread` | C reader: files as Arrow C streams (`include/tparquet_read.h`) |
