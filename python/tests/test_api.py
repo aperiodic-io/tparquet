@@ -93,8 +93,10 @@ def test_column_encodings(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
     assert "RLE_DICTIONARY" in found["i32"]
     assert "RLE_DICTIONARY" not in found["f64"] | found["f32"]
     assert ppc.read_table(path).equals(numbers)
-    with ppc.Writer(tmp_path / "w.parquet", numbers.schema, policy="base", encodings={"f64": "ALP"}) as w:
+    bss = {"f64": "BYTE_STREAM_SPLIT"}
+    with ppc.Writer(tmp_path / "w.parquet", numbers.schema, policy="base", encodings=bss) as w:
         w.write(numbers)
+    assert "BYTE_STREAM_SPLIT" in pq.ParquetFile(tmp_path / "w.parquet").metadata.row_group(0).column(3).encodings
     assert ppc.read_table(tmp_path / "w.parquet").equals(numbers)
     import polars as pl
 
@@ -102,7 +104,6 @@ def test_column_encodings(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
     import tparquet.polars as ppl
 
     pandas_out, polars_out = tmp_path / "pandas.parquet", tmp_path / "polars.parquet"
-    bss = {"f64": "BYTE_STREAM_SPLIT"}
     ppd.to_parquet(numbers.to_pandas(), pandas_out, policy="base", encodings=bss)
     ppl.write_parquet(pl.DataFrame(numbers), polars_out, policy="base", encodings=bss)
     for out in (pandas_out, polars_out):
