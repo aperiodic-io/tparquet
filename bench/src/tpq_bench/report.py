@@ -51,7 +51,7 @@ def groups(entries: Sequence[Entry]) -> list[tuple[str, list[Entry]]]:
     return [(g, [e for e in entries if e.group == g]) for g in GROUPS if any(e.group == g for e in entries)]
 
 
-FORMATS = ("zstd9", "tuned", "tparquet")
+FORMATS = ("zstd9", "tuned", "alp", "tparquet")
 
 
 def speed(n: int, seconds: float) -> str:
@@ -72,16 +72,18 @@ def _speeds(entries: Sequence[Entry]) -> str:
 def _sizes(label: str, entries: Sequence[Entry]) -> str:
     z9 = sum(e.m.zstd9_bytes for e in entries)
     tuned = sum(e.m.tuned_bytes for e in entries)
+    alp = sum(e.m.alp_bytes for e in entries)
     tp = sum(e.m.tparquet_bytes for e in entries)
     rows = sum(e.m.rows for e in entries)
     return (
-        f"| {label} | {len(entries)} | {rows:,} | {size(z9)} | {size(tuned)} | {size(tp)} "
-        f"| **{tp / z9:.3f}×** | **{tp / tuned:.3f}×** |\n"
+        f"| {label} | {len(entries)} | {rows:,} | {size(z9)} | {size(tuned)} | {size(alp)} | {size(tp)} "
+        f"| **{tp / z9:.3f}×** | **{tp / tuned:.3f}×** | **{tp / alp:.3f}×** |\n"
     )
 
 
 SPEED_COLUMNS = (
-    "Arrow data | Write ZSTD(9) | Write tuned | Write tparquet | Read ZSTD(9) | Read tuned | Read tparquet |\n"
+    "Arrow data | Write ZSTD(9) | Write tuned | Write ALP | Write tparquet "
+    "| Read ZSTD(9) | Read tuned | Read ALP | Read tparquet |\n"
 )
 
 
@@ -89,33 +91,34 @@ def markdown(entries: Sequence[Entry]) -> str:
     """Summary tables of sizes and speeds, one row per data type, then both tables per data type."""
     by_group = groups(entries)
     out = [
-        "| Data type | Datasets | Rows | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) "
-        "| tparquet / tuned |\n",
-        "|---|---:|---:|---:|---:|---:|---:|---:|\n",
+        "| Data type | Datasets | Rows | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | tparquet / ZSTD(9) "
+        "| tparquet / tuned | tparquet / ALP |\n",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
     ]
     out += [_sizes(GROUPS[g], es) for g, es in by_group]
     out.append(_sizes("**All**", entries))
     out += [
         "\nSpeed, in MB/s of Arrow data (the columns' size in memory):\n\n",
         f"| Data type | {SPEED_COLUMNS}",
-        "|---|---:|---:|---:|---:|---:|---:|---:|\n",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
     ]
     out += [f"| {GROUPS[g]} | {_speeds(es)}" for g, es in by_group]
     out.append(f"| **All** | {_speeds(entries)}")
     for g, es in by_group:
         out += [
             f"\n### {GROUPS[g]}\n\n",
-            "| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | tparquet | tparquet / ZSTD(9) "
-            "| tparquet / tuned | PCODEC columns |\n",
-            "|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n",
+            "| Provider | Data | Rows | As delivered | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet "
+            "| tparquet / ZSTD(9) | tparquet / tuned | tparquet / ALP | ALP columns | PCODEC columns |\n",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n",
         ]
         out += [
             f"| {e.provider} | {e.data} | {e.m.rows:,} | {size(e.source_bytes)} | {size(e.m.zstd9_bytes)} "
-            f"| {size(e.m.tuned_bytes)} | {size(e.m.tparquet_bytes)} | {e.m.ratio:.3f}× | {e.m.ratio_tuned:.3f}× "
+            f"| {size(e.m.tuned_bytes)} | {size(e.m.alp_bytes)} | {size(e.m.tparquet_bytes)} | {e.m.ratio:.3f}× "
+            f"| {e.m.ratio_tuned:.3f}× | {e.m.ratio_alp:.3f}× | {e.m.alp_columns} of {len(e.m.alp_encodings)} "
             f"| {e.m.pcodec_columns} of {len(e.m.codecs)} |\n"
             for e in es
         ]
-        out += [f"\n| Provider | Data | {SPEED_COLUMNS}", "|---|---|---:|---:|---:|---:|---:|---:|---:|\n"]
+        out += [f"\n| Provider | Data | {SPEED_COLUMNS}", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"]
         out += [f"| {e.provider} | {e.data} | {_speeds([e])}" for e in es]
     return "".join(out)
 
@@ -124,7 +127,7 @@ def to_json(entries: Sequence[Entry]) -> str:
     rows = []
     for e in entries:
         m = dataclasses.asdict(e.m)
-        codecs, encodings = m.pop("codecs"), m.pop("encodings")
+        codecs, encodings, alp_encodings = m.pop("codecs"), m.pop("encodings"), m.pop("alp_encodings")
         rows.append(
             {
                 "provider": e.provider,
@@ -134,9 +137,11 @@ def to_json(entries: Sequence[Entry]) -> str:
                 **{k: v for k, v in m.items() if k == "rows" or k.endswith("_bytes")},
                 "ratio": e.m.ratio,
                 "ratio_tuned": e.m.ratio_tuned,
+                "ratio_alp": e.m.ratio_alp,
                 **{k: v for k, v in m.items() if k.startswith(("write_s_", "read_s_"))},
                 "codecs": codecs,
                 "tuned_encodings": encodings,
+                "alp_encodings": alp_encodings,
             }
         )
     return json.dumps(rows, indent=2, ensure_ascii=False) + "\n"  # pragma: no mutate (None is False)

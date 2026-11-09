@@ -117,6 +117,7 @@ def to_parquet(
     # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
     base: str = "zstd(3)",  # pragma: no mutate
     row_group_size: int | None = None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Writes a DataFrame as a Parquet file with PCODEC where the policy selects it.
 
@@ -128,5 +129,12 @@ def to_parquet(
         raise TypeError(f"expected a pandas DataFrame, got {type(df).__name__}")
     table = _encode_categories(pa.Table.from_pandas(df, preserve_index=index))
     return write_table(
-        table, sink, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size
+        table,
+        sink,
+        policy=policy,
+        columns=columns,
+        level=level,
+        base=base,
+        row_group_size=row_group_size,
+        encodings=encodings,
     )
