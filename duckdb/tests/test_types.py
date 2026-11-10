@@ -9,9 +9,8 @@ column must read the same through read_tparquet as through read_parquet.
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from canonical import rows_of
-from conftest import copy_to, describe, rows
+from conftest import DUCKDB_1, copy_to, describe, rows
 
 N = 3000
 
@@ -71,22 +70,21 @@ CASES = {
     "map_of_lists": (null_every(7, f"MAP {{i: {null_every(5, '[i, NULL]')}}}"), None),
     "map_of_structs": (null_every(7, f"MAP {{'a' || i: {null_every(5, "{'s': i}")}}}"), None),
     "map_enum_keys": (null_every(7, "MAP {(['a', 'b'])[1 + i % 2]::ENUM('a', 'b'): i}"), "MAP(VARCHAR, BIGINT)"),
-    "array": (null_every(7, f"[i::INTEGER, {null_every(3, '-i::INTEGER')}]::INTEGER[2]"), None),
-    "array_of_varchar": (null_every(7, f"['a' || i, {null_every(3, "'b'")}, '']::VARCHAR[3]"), None),
-    "array_of_structs": (null_every(7, f"[{{'a': i}}, {null_every(3, "{'a': NULL}")}]::STRUCT(a BIGINT)[2]"), None),
-    "array_of_arrays": (null_every(7, f"[[i, i], {null_every(3, '[NULL, i]')}, [1, 2]]::BIGINT[2][3]"), None),
-    "list_of_arrays": (null_every(7, f"[[i, i]::BIGINT[2], {null_every(3, '[1, 2]::BIGINT[2]')}]"), None),
+    # the CASE of null_every is over lists, cast to arrays after it: DuckDB 1.5 has no CASE over
+    # arrays ("Unimplemented type for case expression")
+    "array": ("(" + null_every(7, f"[i::INTEGER, {null_every(3, '-i::INTEGER')}]") + ")::INTEGER[2]", None),
+    "array_of_varchar": ("(" + null_every(7, f"['a' || i, {null_every(3, "'b'")}, '']") + ")::VARCHAR[3]", None),
+    "array_of_structs": ("(" + null_every(7, f"[{{'a': i}}, {null_every(3, "{'a': NULL}")}]") + ")::STRUCT(a BIGINT)[2]", None),
+    "array_of_arrays": ("(" + null_every(7, f"[[i, i], {null_every(3, '[NULL, i]')}, [1, 2]]") + ")::BIGINT[2][3]", None),
+    "list_of_arrays": (f"[[i, i], {null_every(3, '[1, 2]')}]::BIGINT[2][]", None),
     "struct_of_map_list": (
         null_every(7, f"[{{'m': {null_every(5, "MAP {'k': [i, NULL]}")}, 'n': {null_every(3, 'i')}}}]"),
         None,
     ),
     "deep": (null_every(13, f"[[{{'a': [{{'b': {null_every(5, '[i]')}}}]}}]]"), None),
 }
-
-
-# where read_tparquet gives a DuckDB Parquet file's column another type than read_parquet does:
-# it keeps the file's millisecond unit (read_parquet widens it to microseconds)
-STANDARD_TYPES = {"timestamp_ms": "TIMESTAMP_MS"}
+if DUCKDB_1:
+    del CASES["timestamptz_ns"]  # DuckDB 1.x has no TIMESTAMP WITH TIME ZONE in nanoseconds
 
 
 @pytest.fixture(scope="module")
@@ -99,20 +97,23 @@ def database(tmp_path_factory):
     con.close()
 
 
-@pytest.mark.parametrize("options", [{}, {"POLICY": "'pcodec'", "ROW_GROUP_ROWS": 1000}], ids=["auto", "pcodec-rg1000"])
+@pytest.mark.parametrize("options", [{}, {"COMPRESSION": "pcodec", "ROW_GROUP_SIZE": 1000}], ids=["auto", "pcodec-rg1000"])
 @pytest.mark.parametrize("name", list(CASES))
 def test_a_type_round_trips_in_order(database, name, options):
     con, d = database
-    expr, read_type = CASES[name]
+    expr, _ = CASES[name]
     con.execute(f"CREATE OR REPLACE TABLE src AS SELECT {expr} AS v FROM range({N}) r(i)")
     path = copy_to(con, "SELECT * FROM src", d / f"{name}.parquet", **options)
-    src_type = describe(con, "SELECT * FROM src")[0][1]
+    # the type is the one DuckDB's own Parquet round trip gives (read_tparquet is DuckDB's reader)
+    standard = d / f"{name}.roundtrip.parquet"
+    con.execute(f"COPY src TO '{standard}' (FORMAT parquet)")
+    native_type = describe(con, f"SELECT v FROM read_parquet('{standard}')")[0][1]
     back = f"read_tparquet('{path}', file_row_number := true)"
-    assert describe(con, f"SELECT v FROM {back}") == [("v", read_type or src_type)]
+    assert describe(con, f"SELECT v FROM {back}") == [("v", native_type)]
     differ = rows(
         con,
         f"SELECT count(*) FROM (SELECT v, row_number() OVER () - 1 AS n FROM src) a "
-        f"JOIN {back} b ON a.n = b.file_row_number WHERE a.v IS DISTINCT FROM b.v",
+        f"JOIN {back} b ON a.n = b.file_row_number WHERE a.v::{native_type} IS DISTINCT FROM b.v",
     )
     assert differ == [(0,)]
     assert rows(con, f"SELECT count(*), count(v) FROM {back}") == rows(con, "SELECT count(*), count(v) FROM src")
@@ -128,7 +129,7 @@ def test_duckdbs_own_parquet_copy_reads_as_read_parquet_reads_it(database, name)
     con.execute(f"COPY src TO '{path}' (FORMAT parquet, ROW_GROUP_SIZE 1024)")
     ours, native = f"read_tparquet('{path}')", f"read_parquet('{path}')"
     native_type = describe(con, f"SELECT * FROM {native}")[0][1]
-    assert describe(con, f"SELECT * FROM {ours}") == [("v", STANDARD_TYPES.get(name, native_type))]
+    assert describe(con, f"SELECT * FROM {ours}") == [("v", native_type)]
     # the values are the same (in read_parquet's type where the types differ)
     assert rows_of(con.sql(f"SELECT v::{native_type} AS v FROM {ours}").to_arrow_table()) == rows_of(
         con.sql(f"SELECT * FROM {native}").to_arrow_table()
@@ -152,7 +153,7 @@ def test_floats_keep_every_bit(database):
     )
     src = d / "bits.parquet"
     pq.write_table(t, src)
-    for options in [{"POLICY": "'pcodec'"}, {"POLICY": "'base'"}, {"POLICY": "'pcodec'", "LEVEL": 0}]:
+    for options in [{"COMPRESSION": "pcodec"}, {"COMPRESSION": "zstd"}, {"COMPRESSION": "pcodec", "COMPRESSION_LEVEL": 0}]:
         path = copy_to(con, f"SELECT * FROM read_tparquet('{src}')", d / "bits.copy.parquet", **options)
         back = con.sql(f"SELECT * FROM read_tparquet('{path}')").to_arrow_table()
         assert back.column("d").combine_chunks().view(pa.uint64()).to_pylist() == bits64
@@ -181,8 +182,8 @@ def test_decimals_of_every_width_and_scale(database):
     pq.write_table(pa.table(columns), src)
     con.execute(f"CREATE OR REPLACE TABLE dec AS SELECT * FROM read_parquet('{src}')")
     assert describe(con, "SELECT d38_19, d4_0 FROM dec") == [("d38_19", "DECIMAL(38,19)"), ("d4_0", "DECIMAL(4,0)")]
-    for policy in ["'auto'", "'pcodec'", "'base'"]:
-        path = copy_to(con, "SELECT * FROM dec", d / "dec.parquet", POLICY=policy)
+    for codec in ["pcodec", "zstd"]:
+        path = copy_to(con, "SELECT * FROM dec", d / "dec.parquet", COMPRESSION=codec)
         back = f"read_tparquet('{path}')"
         assert describe(con, f"SELECT * FROM {back}") == describe(con, "SELECT * FROM dec")
         assert rows(con, f"SELECT * FROM {back}") == rows(con, "SELECT * FROM dec")
@@ -196,7 +197,7 @@ def test_a_table_of_every_type_in_any_column_order(database):
         + ", ".join(f'{CASES[n][0]} AS "{n}"' for n in names)
         + f" FROM range({N}) r(i)"
     )
-    path = copy_to(con, "SELECT * FROM wide", d / "wide.parquet", ROW_GROUP_ROWS=777)
+    path = copy_to(con, "SELECT * FROM wide", d / "wide.parquet", ROW_GROUP_SIZE=777)
     back = f"read_tparquet('{path}')"
     # every projection order reads the same values as the table
     for order in [names, names[::-1], names[1::2] + names[::2]]:
@@ -205,33 +206,30 @@ def test_a_table_of_every_type_in_any_column_order(database):
         assert diff == [(0,)], order[:3]
 
 
-# types COPY (FORMAT tparquet) refuses, as DuckDB's own Parquet writer stores them, and what
-# read_tparquet gives for them: (expression, read_parquet's type, read_tparquet's type, the
-# values as read_tparquet gives them, as text)
+# more types, as DuckDB's own Parquet writer stores them (the cases above cover the rest)
 STANDARD_ONLY = {
-    "interval": (null_every(7, "INTERVAL (i) MONTH + INTERVAL (i * 13) DAY + INTERVAL (i * 7) MILLISECOND"), "INTERVAL", "INTERVAL", None),
-    "hugeint": (null_every(7, "(i * 1000)::HUGEINT"), "DOUBLE", "DOUBLE", None),
-    "uhugeint": (null_every(7, "(i * 1000)::UHUGEINT"), "DOUBLE", "DOUBLE", None),
-    "bit": (null_every(7, "(i % 16)::BIT"), "VARCHAR", "VARCHAR", None),
-    "union": (null_every(7, "union_value(k := i::INTEGER)::UNION(k INTEGER, s VARCHAR)"), None, None, None),
-    # read_tparquet: the 16 bytes of the UUID (DuckDB's Parquet reader gives a UUID)
-    "uuid": (null_every(7, "md5(i::VARCHAR)::UUID"), "UUID", "BLOB", "unhex(replace(v::VARCHAR, '-', ''))"),
-    # read_tparquet: the time in UTC (DuckDB's writer stores TIMETZ normalized to UTC)
-    "timetz": (null_every(7, "('12:00:00+0' || (i % 10)::VARCHAR)::TIMETZ"), "TIME WITH TIME ZONE", "TIME", "v::TIME"),
+    "interval": (null_every(7, "INTERVAL (i) MONTH + INTERVAL (i * 13) DAY + INTERVAL (i * 7) MILLISECOND"),),
+    "hugeint": (null_every(7, "(i * 1000)::HUGEINT"),),
+    "uhugeint": (null_every(7, "(i * 1000)::UHUGEINT"),),
+    "bit": (null_every(7, "(i % 16)::BIT"),),
+    "union": (null_every(7, "union_value(k := i::INTEGER)::UNION(k INTEGER, s VARCHAR)"),),
+    "uuid": (null_every(7, "md5(i::VARCHAR)::UUID"),),
+    "timetz": (null_every(7, "('12:00:00+0' || (i % 10)::VARCHAR)::TIMETZ"),),
 }
 
 
 @pytest.mark.parametrize("name", list(STANDARD_ONLY))
-def test_standard_files_with_types_copy_refuses(database, name):
+def test_the_other_types_read_and_write_as_duckdbs_own_parquet(database, name):
+    """read_tparquet reads them as read_parquet does, and COPY (FORMAT tparquet) writes them as
+    DuckDB's own Parquet writer does (read_tparquet and the COPY are DuckDB's)."""
     con, d = database
-    expr, native_type, our_type, as_ours = STANDARD_ONLY[name]
+    expr = STANDARD_ONLY[name][0]
     con.execute(f"CREATE OR REPLACE TABLE src AS SELECT {expr} AS v FROM range({N}) r(i)")
     path = d / f"{name}.standard.parquet"
     con.execute(f"COPY src TO '{path}' (FORMAT parquet)")
-    native = describe(con, f"SELECT * FROM read_parquet('{path}')")[0][1]
-    ours = describe(con, f"SELECT * FROM read_tparquet('{path}')")[0][1]
-    assert (native, ours) == (native_type or native, our_type or native)
-    want = f"SELECT {as_ours or 'v'} AS v FROM read_parquet('{path}')"
-    assert rows_of(con.sql(f"SELECT * FROM read_tparquet('{path}')").to_arrow_table()) == rows_of(
-        con.sql(want).to_arrow_table()
-    )
+    ours = copy_to(con, "SELECT * FROM src", d / f"{name}.tparquet.parquet")
+    native = describe(con, f"SELECT * FROM read_parquet('{path}')")
+    want = rows_of(con.sql(f"SELECT * FROM read_parquet('{path}')").to_arrow_table())
+    for f in (path, ours):
+        assert describe(con, f"SELECT * FROM read_tparquet('{f}')") == native, f
+        assert rows_of(con.sql(f"SELECT * FROM read_tparquet('{f}')").to_arrow_table()) == want, f

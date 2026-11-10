@@ -8,11 +8,12 @@ them).
 """
 
 import pytest
+from canonical import rows_of
+from conftest import connect, copy_to, rows
 from hypothesis import given
 from hypothesis import strategies as st
 
-from canonical import rows_of
-from conftest import connect, copy_to, rows
+import duckdb
 
 N = 50_000
 
@@ -40,12 +41,12 @@ def files(tmp_path_factory):
     d = tmp_path_factory.mktemp("queries")
     con = connect()
     con.execute(f"CREATE TABLE t AS {TABLE}")
-    pcodec = copy_to(con, "SELECT * FROM t", d / "pcodec.parquet", POLICY="'pcodec'", ROW_GROUP_ROWS=4999)
+    pcodec = copy_to(con, "SELECT * FROM t", d / "pcodec.parquet", COMPRESSION="pcodec", ROW_GROUP_SIZE=4999)
     standard = d / "standard.parquet"
     con.execute(f"COPY t TO '{standard}' (FORMAT parquet, ROW_GROUP_SIZE 10000)")
     # the same rows split over three files, for globs and lists
     for part, (lo, hi) in enumerate([(0, 20_000), (20_000, 20_001), (20_001, N)]):
-        copy_to(con, f"SELECT * FROM t WHERE id >= {lo} AND id < {hi}", d / f"part-{part}.parquet", ROW_GROUP_ROWS=3000)
+        copy_to(con, f"SELECT * FROM t WHERE id >= {lo} AND id < {hi}", d / f"part-{part}.parquet", ROW_GROUP_SIZE=3000)
     con.close()
     return d, pcodec, standard
 
@@ -102,7 +103,8 @@ QUERIES = [
     "SELECT k, count(DISTINCT sym) FROM {t} GROUP BY ALL HAVING count(*) > 40",
     "SELECT DISTINCT sym FROM {t}",
     "SELECT buy, list_sort(list(DISTINCT st.b)) FROM {t} GROUP BY buy",
-    "SELECT unnest(li) AS x, count(*) FROM {t} GROUP BY x",
+    # (DuckDB 1.5 does not bind an unnest grouped by its alias)
+    "SELECT x, count(*) FROM (SELECT unnest(li) AS x FROM {t}) GROUP BY x",
     "SELECT a.id, b.id FROM {t} a JOIN {t} b ON a.k = b.k AND a.id + 1 = b.id",
     "SELECT id, sum(price) OVER (PARTITION BY sym ORDER BY id ROWS 3 PRECEDING) AS w FROM {t}",
     "SELECT count(*) FROM (SELECT DISTINCT * FROM {t})",
@@ -137,14 +139,19 @@ def test_a_limit_without_order_gives_that_many_rows_of_the_file(con, files, limi
     assert all(0 <= r[0] < N for r in got)
 
 
-def test_count_star_reads_one_column(con, files):
+def test_count_star_comes_from_the_footer(con, files, tmp_path):
     d, pcodec, _ = files
-    # DuckDB asks a C API table function (which has no row id) for its first column
-    plan = rows(con, f"EXPLAIN SELECT count(*) FROM read_tparquet('{pcodec}')")[0][1]
-    scan = plan.split("Read Tparquet")[-1].split("╰")[0]
-    assert "Projections: id " in scan and "price" not in scan
     assert rows(con, f"SELECT count(*) FROM read_tparquet('{pcodec}')") == [(N,)]
     assert rows(con, f"SELECT count(*) FROM read_tparquet('{pcodec}', filename := true)") == [(N,)]
+    # the column data is not read: a file whose pages are destroyed still counts
+    damaged = tmp_path / "damaged.parquet"
+    data = bytearray(pcodec.read_bytes())
+    footer = int.from_bytes(data[-8:-4], "little")
+    data[4 : len(data) - 8 - footer] = bytes(len(data) - 12 - footer)
+    damaged.write_bytes(bytes(data))
+    assert rows(con, f"SELECT count(*) FROM read_tparquet('{damaged}')") == [(N,)]
+    with pytest.raises(duckdb.Error):
+        rows(con, f"SELECT sum(id) FROM read_tparquet('{damaged}')")
 
 
 def test_projection_pushdown_is_in_the_plan(con, files):

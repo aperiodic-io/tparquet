@@ -25,9 +25,15 @@ import org.apache.spark.sql.types.StructType
  *
  * Write options: `level` (pcodec level 0..12, default 8), `decimal` (DECIMAL mode for floats,
  * default true), `rowGroupSize` and `pageSize` in bytes (default `parquet.block.size` and
- * `parquet.page.size`, else 128 MiB and 1 MiB), `outputTimestampType` (default `TIMESTAMP_MICROS`,
- * where Spark's Parquet source writes the deprecated INT96, which PCODEC does not model).
- * `compression` may only be `pcodec`.
+ * `parquet.page.size`, else 128 MiB and 1 MiB), `outputTimestampType` (`INT96`,
+ * `TIMESTAMP_MICROS` or `TIMESTAMP_MILLIS`). `compression` may only be `pcodec`.
+ *
+ * Timestamps are written as `format("parquet")` writes them: as the session's
+ * `spark.sql.parquet.outputTimestampType` says (Spark's default is INT96), with Spark's INT96
+ * rebase (`spark.sql.parquet.int96RebaseModeInWrite`), unless the `outputTimestampType` option
+ * overrides it. PCODEC does not model INT96, so INT96 columns are the payload's ZSTD fallback;
+ * `outputTimestampType=TIMESTAMP_MICROS` (or the session setting) makes them INT64, which PCODEC
+ * compresses.
  */
 class TparquetFileFormat extends ParquetFileFormat with DataSourceRegister {
   override def shortName(): String = "tparquet"
@@ -45,11 +51,13 @@ class TparquetFileFormat extends ParquetFileFormat with DataSourceRegister {
       dataSchema: StructType): OutputWriterFactory = {
     val writerOptions = TparquetFileFormat.options(options, job.getConfiguration)
     // Spark's Parquet source puts the write support's settings (the row schema, the timestamp
-    // and decimal formats) in the job's configuration; its codec and writer are not used
+    // and decimal formats) in the job's configuration; its codec and writer are not used. The
+    // timestamp type is the session's spark.sql.parquet.outputTimestampType, as for `format("parquet")`;
+    // the outputTimestampType option overrides it
     super.prepareWrite(sparkSession, job, options - "compression", dataSchema)
-    job.getConfiguration.set(
-      SQLConf.PARQUET_OUTPUT_TIMESTAMP_TYPE.key,
-      TparquetFileFormat.option(options, "outputTimestampType").getOrElse("TIMESTAMP_MICROS"))
+    TparquetFileFormat.option(options, "outputTimestampType").foreach { t =>
+      job.getConfiguration.set(SQLConf.PARQUET_OUTPUT_TIMESTAMP_TYPE.key, t)
+    }
     new TparquetOutputWriterFactory(writerOptions)
   }
 }

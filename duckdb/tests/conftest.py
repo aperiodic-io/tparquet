@@ -1,24 +1,23 @@
-"""Fixtures of the SQL tests: a DuckDB connection with the built extension loaded.
+"""Fixtures of the tests: a DuckDB connection with the built extension loaded.
 
-The extension comes from $TPARQUET_DUCKDB_EXTENSION (a `tparquet.duckdb_extension`, as
-`make build` or the cargo test `tests/sql.rs` makes it).
+The extension comes from $TPARQUET_DUCKDB_EXTENSION (a `tparquet.duckdb_extension` that
+`duckdb/build.sh VERSION` built for the DuckDB version of the Python `duckdb` package the tests
+run with; `make test` runs them for each).
 """
 
 import faulthandler
 import os
 import pathlib
 import subprocess
-import sys
-import threading
-import time
 
-import duckdb
 import pytest
 from hypothesis import HealthCheck, settings
 
+import duckdb
+
 _slow_ok = [HealthCheck.too_slow, HealthCheck.function_scoped_fixture, HealthCheck.data_too_large]
-# HYPOTHESIS_PROFILE: "default", "thorough" (more examples; `make thorough`) or "mutation" (few
-# fixed examples: `make mutation` runs the suite once per mutant)
+# HYPOTHESIS_PROFILE: "default", "thorough" (more examples) or "mutation" (few fixed examples:
+# `make mutation` runs the suite once per mutant)
 settings.register_profile("default", max_examples=25, deadline=None, suppress_health_check=_slow_ok)
 settings.register_profile("thorough", max_examples=400, deadline=None, suppress_health_check=_slow_ok)
 settings.register_profile(
@@ -26,31 +25,8 @@ settings.register_profile(
 )
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
-
-def _watch_memory(limit_mb: int) -> None:
-    """Ends the process when its resident memory passes `limit_mb`."""
-    page = os.sysconf("SC_PAGE_SIZE")
-    while True:
-        with open("/proc/self/statm") as f:
-            resident = int(f.read().split()[1]) * page
-        if resident > limit_mb << 20:
-            print(f"conftest: resident memory {resident >> 20} MB is over {limit_mb} MB", file=sys.stderr)
-            os._exit(3)
-        time.sleep(0.2)
-
-
-# $TPARQUET_DUCKDB_MEMORY_LIMIT_MB bounds the resident memory of the test process (`make
-# mutation` sets it). A mutant that makes a scan loop forever produces rows without end, about
-# 65 MB/s, which exhausts a CI runner before cargo-mutants' timeout. Over the limit the process
-# exits, the tests fail, and the mutant is caught. (An address-space limit does not work:
-# DuckDB and the other native libraries reserve far more address space than they use.)
-if limit := os.environ.get("TPARQUET_DUCKDB_MEMORY_LIMIT_MB"):
-    threading.Thread(target=_watch_memory, args=(int(limit),), daemon=True).start()
-
-# $TPARQUET_DUCKDB_TEST_TIMEOUT (seconds, `make mutation` sets it) ends the process when one test
-# runs longer, even inside DuckDB's C code: faulthandler's watchdog dumps the stacks and exits.
-# An endless mutant then fails in that time, long before cargo-mutants' own timeout, at which
-# CI runners were seen to shut down.
+# $TPARQUET_DUCKDB_TEST_TIMEOUT (seconds) ends the process when one test runs longer, even inside
+# DuckDB's C++ code: faulthandler's watchdog dumps the stacks and exits (a mutant that hangs).
 _TEST_TIMEOUT = float(os.environ.get("TPARQUET_DUCKDB_TEST_TIMEOUT", "0"))
 
 
@@ -66,6 +42,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TESTDATA = ROOT / "testdata"
 FILES = TESTDATA / "files"
 EXPECTED = TESTDATA / "expected"
+PAYLOADS = TESTDATA / "payloads"
+
+#: the DuckDB version the tests run with ("v2.0.0", "v1.5.6")
+DUCKDB_VERSION = duckdb.connect().execute("SELECT library_version FROM pragma_version()").fetchone()[0]
+#: DuckDB 1.x: what DuckDB itself does differently from 2.0 (its types, its reader and binder)
+DUCKDB_1 = DUCKDB_VERSION.startswith("v1.")
 
 
 def extension_path() -> str:
@@ -98,7 +80,7 @@ def plain():
 
 
 def cli() -> str:
-    """The tparquet CLI ($TPARQUET_CLI, built by tests/sql.rs or `make build`)."""
+    """The tparquet CLI ($TPARQUET_CLI; `make test` builds it)."""
     path = os.environ.get("TPARQUET_CLI")
     if not path:
         raise RuntimeError("set TPARQUET_CLI to the tparquet binary")
@@ -120,14 +102,21 @@ def rows(con, sql):
     return con.execute(sql).fetchall()
 
 
-def describe(con, sql):
-    """(name, type) of every column of the query `sql`."""
-    return [(r[0], r[1]) for r in con.execute(f"DESCRIBE {sql}").fetchall()]
+def codecs(con, path) -> dict[str, set[str]]:
+    """The codecs of each column of a file, from its footer."""
+    out: dict[str, set[str]] = {}
+    for column, codec in rows(con, f"SELECT path_in_schema, compression FROM tparquet_metadata('{path}')"):
+        out.setdefault(column, set()).add(codec)
+    return out
 
 
 def copy_to(con, query, path, **options):
-    """COPY (query) TO path (FORMAT tparquet), naming the columns as the query does."""
-    names = ", ".join("'" + n.replace("'", "''") + "'" for n, _ in describe(con, query))
+    """COPY (query) TO path (FORMAT tparquet, options...)."""
     opts = "".join(f", {k} {v}" for k, v in options.items())
-    con.execute(f"COPY ({query}) TO '{path}' (FORMAT tparquet, COLUMN_NAMES [{names}]{opts})")
+    con.execute(f"COPY ({query}) TO '{path}' (FORMAT tparquet{opts})")
     return path
+
+
+def describe(con, sql):
+    """(name, type) of every column of the query `sql`."""
+    return [(r[0], r[1]) for r in con.execute(f"DESCRIBE {sql}").fetchall()]

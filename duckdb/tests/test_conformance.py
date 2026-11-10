@@ -5,11 +5,18 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from canonical import lines
-from conftest import EXPECTED, FILES, connect
+from conftest import DUCKDB_1, EXPECTED, FILES, connect
 
 NAMES = sorted(p.stem for p in FILES.glob("*.parquet"))
+
+# DuckDB 1.x has no TIMESTAMP WITH TIME ZONE in nanoseconds: it reads temporal's ts_ns_utc as
+# microseconds, as its read_parquet does (test_a_nanosecond_utc_timestamp_reads_as_read_parquet)
+LOSSY = {"temporal"} if DUCKDB_1 else set()
+
+
+def vector(name):
+    return pytest.param(name, marks=pytest.mark.xfail(strict=True, reason="DuckDB 1.x: no TIMESTAMPTZ_NS")) if name in LOSSY else name
 
 
 def test_every_vector_is_covered():
@@ -17,7 +24,7 @@ def test_every_vector_is_covered():
     assert sorted(p.stem for p in EXPECTED.glob("*.jsonl")) == NAMES
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", [vector(n) for n in NAMES])
 def test_canonical_rows_match_byte_for_byte(con, name):
     path = FILES / f"{name}.parquet"
     table = con.sql(
@@ -47,7 +54,7 @@ def test_rows_and_row_groups_match_the_manifest(con, name):
     assert pq.ParquetFile(path).metadata.num_row_groups == MANIFEST[name]["row_groups"]
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", [vector(n) for n in NAMES])
 def test_every_single_column_reads_its_expected_values(con, name):
     path = FILES / f"{name}.parquet"
     schema = pq.read_schema(path)
@@ -60,7 +67,7 @@ def test_every_single_column_reads_its_expected_values(con, name):
         assert got == [{column: r[column]} for r in want], column
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", [vector(n) for n in NAMES])
 def test_four_threads_read_the_same_rows(name):
     c = connect()
     c.execute("SET threads = 4")

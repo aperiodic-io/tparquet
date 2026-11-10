@@ -40,6 +40,7 @@ check-fork:
 	scripts/check-fork.sh
 	scripts/check-fork-java.sh
 	scripts/check-cpp-fork.sh
+	scripts/check-duckdb-fork.sh
 
 testdata:
 	$(CARGO) run -j $(JOBS) -p tparquet --bin gen-testdata
@@ -61,11 +62,11 @@ fuzz-smoke:
 # also exits 3 when there are both timeouts and missed mutants, so missed.txt is checked.
 MUTANTS_OK = || { [ $$? -eq 3 ] && [ ! -s mutants.out/missed.txt ]; }
 
-# python/rust is judged by the Python suite (see python-mutants); the DuckDB extension has its
-# own run, `make -C duckdb mutation`: the tests of both need Python. rust/jni is judged by the
-# Java suite (`make -C java jni-mutants`): without Java its test passes without testing anything
+# python/rust is judged by the Python suite (see python-mutants), which needs Python (the
+# DuckDB extension, a C++ fork, has its own run: `make -C duckdb mutation`). rust/jni is judged by
+# the Java suite (`make -C java jni-mutants`): without Java its test passes without testing anything
 mutants:
-	$(CARGO) mutants --workspace -j $(JOBS) --exclude 'python/**' --exclude 'duckdb/**' --exclude 'rust/jni/**' $(MUTANTS_OK)
+	$(CARGO) mutants --workspace -j $(JOBS) --exclude 'python/**' --exclude 'rust/jni/**' $(MUTANTS_OK)
 
 PYTHON_VENV := $(CURDIR)/python/.venv/bin/python
 

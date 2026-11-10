@@ -2,7 +2,6 @@
 
 import pyarrow as pa
 import pytest
-
 from canonical import lines, values
 
 

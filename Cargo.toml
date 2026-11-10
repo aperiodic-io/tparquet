@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["rust/core", "rust/capi", "rust/cread", "rust/jni", "rust/parquet", "rust/tparquet", "python", "duckdb"]
+members = ["rust/core", "rust/capi", "rust/cread", "rust/jni", "rust/parquet", "rust/tparquet", "python"]
 
 [workspace.package]
 edition = "2024"

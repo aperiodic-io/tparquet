@@ -1,85 +1,50 @@
-# The DuckDB extension `tparquet`. Run from duckdb/ (or `make -C duckdb ...`).
+# The tparquet DuckDB extension: DuckDB's own parquet extension with the PCODEC codec, a patch
+# over each DuckDB release (FORK.md).
 #
-#   make build     release build: build/tparquet.duckdb_extension (and the tparquet CLI)
-#   make test      unit tests, then the SQL tests on the extension cargo builds for them
-#   make sql       the SQL tests on build/tparquet.duckdb_extension
-#   make thorough  the same with many more generated cases (Hypothesis profile `thorough`)
-#   make mutation  cargo mutants on the extension crate (SQL tests without the `slow` ones)
-#   make check     fmt, clippy, one arrow version, test
-CARGO ?= cargo
+#   make build       build/vVERSION/tparquet.duckdb_extension for each of VERSIONS
+#   make test        the tests (tests/) of each build, with that version's Python duckdb
+#   make thorough    the tests with many more generated tables and damaged files
+#   make mutation    the scripted mutants of the patch (mutation/), for MUTATION_VERSION
+#   make sign KEY=private.pem   sign the builds (sign.py)
+#   make check-fork  the patches apply to the verified releases (scripts/check-duckdb-fork.sh)
+#
+# The tests need the Python environment (`uv sync` here) and the tparquet CLI, which `test`
+# builds.
+
+VERSIONS ?= 1.5.6 2.0.0
+MUTATION_VERSION ?= 2.0.0
 UV ?= uv
-JOBS ?= 2
-PYTHON := .venv/bin/python
-ROOT := ..
-# cargo builds into $CARGO_TARGET_DIR when it is set
-TARGET := $(or $(CARGO_TARGET_DIR),$(ROOT)/target)
-CRATE := -p tparquet-duckdb
-DYLIB := $(if $(filter Darwin,$(shell uname)),libtparquet_duckdb.dylib,libtparquet_duckdb.so)
-EXTENSION := build/tparquet.duckdb_extension
-MUTANTS_OUT ?= $(TARGET)/mutants-duckdb
-MEMORY_LIMIT_MB ?= 2048
-TEST_TIMEOUT ?= 60
+JOBS ?= $(shell nproc)
+ROOT := $(abspath ..)
+CLI := $(ROOT)/target/release/tparquet
+PYTEST = TPARQUET_CLI=$(CLI) TPARQUET_DUCKDB_EXTENSION=$(abspath build/v$(1)/tparquet.duckdb_extension) \
+	$(UV) run --locked --with duckdb==$(1) python -m pytest -q -p no:cacheprovider tests
 
-.PHONY: venv build test sql thorough mutation check fmt-check clippy check-arrow clean
-
-venv: .venv/.synced
-
-# a stamp file of our own: .venv/bin/python is a symlink to the interpreter uv found, which
-# `touch` would follow (on CI runners that interpreter is not writable)
-.venv/.synced: pyproject.toml uv.lock
-	$(UV) sync --python 3.14 --frozen
-	@touch $@
+.PHONY: build test thorough mutation sign check-fork cli clean
 
 build:
-	$(CARGO) build --release -j $(JOBS) $(CRATE) -p tparquet --lib --bin tparquet --bin package-extension
-	@mkdir -p build
-	rm -f $(EXTENSION)
-	$(TARGET)/release/package-extension $(TARGET)/release/$(DYLIB) $(EXTENSION)
-	@echo "built $(EXTENSION)"
+	@for v in $(VERSIONS); do JOBS=$(JOBS) ./build.sh $$v || exit 1; done
 
-test: venv
-	$(CARGO) test -j $(JOBS) $(CRATE)
+cli:
+	cargo build --release -q --manifest-path $(ROOT)/Cargo.toml -p tparquet --bin tparquet
 
-sql: venv build
-	TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION)) TPARQUET_CLI=$(abspath $(TARGET)/release/tparquet) \
-		$(PYTHON) -m pytest -q tests
+test: build cli
+	$(foreach v,$(VERSIONS),$(call PYTEST,$(v)) &&) true
 
-# the SQL tests with many more generated tables, queries and damaged files (minutes)
-thorough: venv build
-	HYPOTHESIS_PROFILE=thorough TPARQUET_DUCKDB_FUZZ_CASES=5000 \
-	TPARQUET_DUCKDB_EXTENSION=$(abspath $(EXTENSION)) TPARQUET_CLI=$(abspath $(TARGET)/release/tparquet) \
-		$(PYTHON) -m pytest -q tests
+thorough: build cli
+	$(foreach v,$(VERSIONS),HYPOTHESIS_PROFILE=thorough TPARQUET_DUCKDB_FUZZ_CASES=5000 $(call PYTEST,$(v)) &&) true
 
-# Every viable mutant must be caught. The slow memory test is left out of the mutation run:
-# a mutant that only it could catch would also have to keep every other result right.
-mutation: venv
-	@# cargo mutants creates the output directory but not its parents (a fresh clone has no target/)
-	mkdir -p $(MUTANTS_OUT)
-	@# exit 3 means some mutants made the tests hang, which detects them; it is accepted only
-	@# when none was missed (the root Makefile's MUTANTS_OK)
-	@# MEMORY_LIMIT_MB: a mutant that makes a scan endless grows ~65 MB/s and would exhaust the
-	@# runner before cargo mutants' timeout; tests/conftest.py ends a test process past it
-	@# (the suite needs under 1 GB; JOBS processes run at once). TEST_TIMEOUT ends a test process
-	@# when one test takes longer (the slowest takes a few seconds), before cargo mutants' timeout
-	TPARQUET_DUCKDB_MEMORY_LIMIT_MB=$(MEMORY_LIMIT_MB) TPARQUET_DUCKDB_TEST_TIMEOUT=$(TEST_TIMEOUT) \
-	TPARQUET_DUCKDB_PYTEST_MARK="not slow" TPARQUET_DUCKDB_PYTHON=$(abspath $(PYTHON)) HYPOTHESIS_PROFILE=mutation \
-		$(CARGO) mutants --dir $(ROOT) $(CRATE) -j $(JOBS) --output $(MUTANTS_OUT) $(MUTANTS_ARGS) \
-		|| { [ $$? -eq 3 ] && [ ! -s $(MUTANTS_OUT)/mutants.out/missed.txt ]; }
+mutation: cli
+	JOBS=$(JOBS) ./build.sh $(MUTATION_VERSION)
+	TPARQUET_CLI=$(CLI) python3 mutation/run.py --version $(MUTATION_VERSION) --jobs $(JOBS) -- \
+		$(UV) run --locked --with duckdb==$(MUTATION_VERSION) python
 
-fmt-check:
-	$(CARGO) fmt $(CRATE) --check
+sign:
+	@test -n "$(KEY)" || { echo "usage: make sign KEY=private.pem"; exit 2; }
+	python3 sign.py $(KEY) $(foreach v,$(VERSIONS),build/v$(v)/tparquet.duckdb_extension)
 
-clippy:
-	$(CARGO) clippy -j $(JOBS) --no-deps $(CRATE) --all-targets -- -D warnings
-
-# the duckdb crate depends on arrow ^60: it must share arrow 60.1.0 with the parquet fork
-check-arrow:
-	@dups="$$($(CARGO) tree $(CRATE) -e normal --duplicates --depth 0 --prefix none \
-		| awk '/^(arrow|parquet)/ {print $$1}' | sort -u)"; \
-	if [ -n "$$dups" ]; then echo "more than one version of:" $$dups; exit 1; fi; \
-	$(CARGO) tree $(CRATE) -e normal --prefix none -f '{p}' | grep -E '^(arrow |arrow-array |parquet )' | sort -u
-
-check: fmt-check clippy check-arrow test
+check-fork:
+	$(ROOT)/scripts/check-duckdb-fork.sh
 
 clean:
-	rm -f $(EXTENSION)
+	rm -rf build

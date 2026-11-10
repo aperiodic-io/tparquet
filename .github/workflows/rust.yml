@@ -132,11 +132,11 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
-          # python/ and duckdb/ have their own mutation runs (python.yml, duckdb.yml), and so has
+          # python/ has its own mutation run (python.yml), and so has
           # rust/jni, judged by the Java suite (java.yml, make -C java jni-mutants). Exit 3: some
           # mutants made the tests hang (detected); accepted only when none was missed (see the
           # Makefile's MUTANTS_OK)
-          cargo mutants --workspace --in-diff pr.diff -j 2 --exclude 'python/**' --exclude 'duckdb/**' --exclude 'rust/jni/**' \
+          cargo mutants --workspace --in-diff pr.diff -j 2 --exclude 'python/**' --exclude 'rust/jni/**' \
             || { [ $? -eq 3 ] && [ ! -s mutants.out/missed.txt ]; }
       - name: every mutant (weekly and on demand)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

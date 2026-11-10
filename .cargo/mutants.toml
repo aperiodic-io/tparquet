@@ -12,17 +12,6 @@ exclude_re = [
     # before the next batch's rows (or by close at the end), with `<=` right away; the file is
     # the same either way (equivalent mutant).
     'rust/tparquet/src/transcode\.rs:.*replace < with <= in transcode',
-    # DuckDB extension. OwnedType::drop destroys a logical type the extension created for a
-    # bind; not destroying it (or destroying only null handles, which
-    # duckdb_destroy_logical_type ignores) leaks a few bytes and changes nothing a query can
-    # observe (equivalent mutants).
-    'duckdb/src/ffi\.rs:.*<impl Drop for OwnedType>::drop',
-    # Scan::next skips record batches without rows, because a chunk of 0 rows would end
-    # DuckDB's scan early; the Parquet reader never yields one (not even for a row group
-    # without rows, as in testdata/files/empty.parquet), so `> 0`, `>= 0` and `true` read the
-    # same rows (equivalent mutants).
-    'duckdb/src/scan\.rs:.*replace match guard batch\.num_rows\(\) > 0 with true in Scan::next',
-    'duckdb/src/scan\.rs:.*replace > with >= in Scan::next',
     # JNI binding. The value a native method returns when it has raised a Java exception (the
     # fallback of `run`, -1 for these two) is discarded by the JVM, so deleting its `-` changes
     # nothing Java can observe (equivalent mutants).

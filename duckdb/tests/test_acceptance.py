@@ -1,17 +1,16 @@
 """Acceptance: DuckDB alone refuses PCODEC; standard files read the same; the ratio target."""
 
 import os
-import resource
 import subprocess
 import sys
 
-import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-
 from canonical import lines
 from conftest import FILES, extension_path
+
+import duckdb
 
 TPARQUET_VECTORS = sorted(p.stem for p in FILES.glob("*.parquet") if p.stem != "standard_control")
 
@@ -55,8 +54,7 @@ def test_c_ratio_against_duckdb_zstd_9_with_a_bit_exact_round_trip(con, tmp_path
     con.execute(f"COPY ticks TO '{zstd}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)")
     ours = tmp_path / "pcodec.parquet"
     con.execute(
-        f"COPY ticks TO '{ours}' (FORMAT tparquet, COLUMN_NAMES ['ts', 'price', 'qty', 'buy'], "
-        "POLICY 'auto', LEVEL 8)"
+        f"COPY ticks TO '{ours}' (FORMAT tparquet, COMPRESSION_LEVEL 8)"
     )
     ratio = ours.stat().st_size / zstd.stat().st_size
     print(f"\ntparquet {ours.stat().st_size} bytes, DuckDB zstd 9 {zstd.stat().st_size} bytes, ratio {ratio:.3f}")
@@ -66,8 +64,9 @@ def test_c_ratio_against_duckdb_zstd_9_with_a_bit_exact_round_trip(con, tmp_path
     back = f"read_tparquet('{ours}')"
     for a, b in [("ticks", back), (back, "ticks")]:
         assert con.execute(f"SELECT count(*) FROM (SELECT * FROM {a} EXCEPT ALL SELECT * FROM {b})").fetchall() == [(0,)]
-    # bit for bit, in order: the doubles compared as their 64-bit patterns
-    want = con.sql("SELECT * FROM ticks").to_arrow_table()
+    # bit for bit, in order: the doubles compared as their 64-bit patterns, against DuckDB's own
+    # Parquet round trip (which reads TIMESTAMP_MS back as TIMESTAMP, as read_tparquet does)
+    want = con.sql(f"SELECT * FROM read_parquet('{zstd}')").to_arrow_table()
     got = con.sql(f"SELECT * FROM {back}").to_arrow_table()
     assert got.schema == want.schema
     for name in ["price", "qty"]:
@@ -89,7 +88,7 @@ c.execute("LOAD '{extension_path()}'")
 if sys.argv[1] == 'write':
     c.execute("COPY (SELECT i AS a, i * 3 AS b, i % 1000 AS c, (i * 0.25)::DOUBLE AS d, i * 7 AS e "
               "FROM range(10000000) r(i)) TO '{path}' "
-              "(FORMAT tparquet, COLUMN_NAMES ['a', 'b', 'c', 'd', 'e'], POLICY 'pcodec', ROW_GROUP_ROWS 1000000)")
+              "(FORMAT tparquet, ROW_GROUP_SIZE 1000000)")
 else:
     before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     r = c.execute("SELECT sum(a), sum(b), sum(c), sum(d), sum(e) FROM read_tparquet('{path}')").fetchall()

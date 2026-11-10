@@ -2,7 +2,7 @@
 # Cross-language acceptance: every implementation reads the vectors every other one wrote.
 #
 #   writers: rust (testdata/), go (tparquet-go-gen), python (transcode, write_table with each
-#            policy), duckdb (COPY with each policy), rust-cli (tparquet encode with each
+#            policy), duckdb (COPY with PCODEC and with snappy), rust-cli (tparquet encode with each
 #            policy, of the rust and go vectors), java (TparquetWriter on the parquet-java fork),
 #            cpp (tparquet::FileWriter on the Arrow C++ fork), datafusion (COPY ... STORED AS
 #            TPARQUET on the parquet 59 fork)
@@ -10,7 +10,8 @@
 #            datafusion
 #
 # Needs: the Rust workspace, Go, python/.venv with the package installed (`make python-test`
-# or `maturin develop`), the built DuckDB extension (`make -C duckdb build`), and the Java
+# or `maturin develop`), the built DuckDB extension (`make -C duckdb build`, for the DuckDB of that
+# environment), and the Java
 # packages installed (`make -C java install`, JDK 21 and Maven), and the C++ library (`make -C
 # cpp build`; TPARQUET_CPP_VECTORS names a built tparquet-cpp-vectors instead).
 # Usage: acceptance/cross/run.sh [OUT]   (default: target/cross)
@@ -21,7 +22,8 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/target}
 out=${1:-$root/target/cross}
 py=${PYTHON:-$root/python/.venv/bin/python}
-ext=${TPARQUET_DUCKDB_EXTENSION:-$root/duckdb/build/tparquet.duckdb_extension}
+# the build of the extension for the DuckDB of that Python environment
+ext=${TPARQUET_DUCKDB_EXTENSION:-$root/duckdb/build/v$("$py" -c 'import duckdb; print(duckdb.__version__)')/tparquet.duckdb_extension}
 vectors="$root/acceptance/cross/vectors.py"
 mkdir -p "$out"
 

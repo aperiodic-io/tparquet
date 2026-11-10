@@ -103,7 +103,7 @@ The packages are not on PyPI or crates.io yet. Build them from a checkout of thi
 ```sh
 cargo install --path rust/tparquet           # CLI
 pip install ./python ./polars-tparquet       # Python, pandas, Polars, DuckDB (Python 3.10+)
-make -C duckdb build                         # DuckDB extension: duckdb/build/tparquet.duckdb_extension
+make -C duckdb build                         # DuckDB extension: duckdb/build/v{1.5.6,2.0.0}/tparquet.duckdb_extension
 cargo build --release -p tparquet-capi       # static library for Go; see go/README.md
 make -C java install                         # Java, Spark: the parquet-java fork; see java/README.md
 make -C java spark-jars                      # the jars a Spark 4.3 distribution needs
@@ -137,7 +137,7 @@ DuckDB:
 ```sql
 LOAD 'tparquet.duckdb_extension';
 SELECT symbol, avg(price) FROM read_tparquet('trades/*.parquet') GROUP BY ALL;
-COPY (SELECT ts, price, qty FROM ticks) TO 'ticks.parquet' (FORMAT tparquet, COLUMN_NAMES ['ts', 'price', 'qty']);
+COPY (SELECT ts, price, qty FROM ticks) TO 'ticks.parquet' (FORMAT tparquet);
 ```
 
 Go, on arrow-go with no fork:
@@ -239,7 +239,7 @@ Use plain ZSTD Parquet when the files must be read by tools you don't control.
 | C | [`rust/capi`](rust/capi) | C ABI over the core ([`tparquet.h`](rust/capi/include/tparquet.h)) |
 | Go | [`go/`](go) | arrow-go codec plugin (no fork: `compress.RegisterCodec`) and writer helpers |
 | Python, pandas, Polars | [`python/`](python) | pyo3 package: `read_table`, `write_table`, `Writer`; `tparquet.pandas`, `tparquet.polars` (`scan_parquet` with pushdown), `tparquet.duckdb` |
-| DuckDB | [`duckdb/`](duckdb) | loadable extension: `read_tparquet(...)`, `COPY ... (FORMAT tparquet)` |
+| DuckDB | [`duckdb/`](duckdb) | DuckDB's own parquet extension with PCODEC (a patch over DuckDB 1.5.6 and 2.0.0): `read_tparquet(...)`, `COPY ... (FORMAT tparquet)` |
 | Java, anything on parquet-java | [`java/`](java) | a small fork of parquet-java 1.17.0 (`parquet-format-structures`, `parquet-common`, `parquet-hadoop`; [`FORK.md`](java/parquet-java/FORK.md)), the codec over JNI ([`tparquet-jni`](java/tparquet-jni), [`rust/jni`](rust/jni)), and [`tparquet`](java/tparquet): `TparquetWriter`, `TparquetReader`, canonical rows |
 | Spark | [`java/tparquet-spark`](java/tparquet-spark) | Spark 4.3 reads PCODEC through the parquet-java fork (every reader); the `tparquet` data source writes it ([Java README](java/README.md#spark)) |
 | DataFusion | [`datafusion/`](datafusion) | DataFusion 55.2 (arrow-rs 59) on a fork of the `parquet` crate 59.3.2 ([`FORK.md`](datafusion/parquet/FORK.md)): `STORED AS TPARQUET`, `COPY`/`INSERT` writing PCODEC; `STORED AS PARQUET` and `read_parquet` read PCODEC files, with pruning |
@@ -255,7 +255,7 @@ make check            # Rust: fmt, clippy, tests, C smoke test, fork check, vect
 make -C go test       # Go
 make python-test      # Python (uv, Python 3.14)
 make polars-test      # the Polars plugin
-make -C duckdb sql    # DuckDB extension
+make -C duckdb test   # DuckDB extension
 make java-test        # Java, the parquet-java fork, Spark (JDK 21, Maven)
 make trino-test       # Trino: the trino-parquet fork, conformance, queries through the Hive connector
 make datafusion-test  # DataFusion and its parquet 59.3.2 fork

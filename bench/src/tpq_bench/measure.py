@@ -220,13 +220,14 @@ def measure(
             timed("zstd9", lambda: z9.write(batch))  # noqa: B023 (called at once)
             timed("tuned", lambda: tuned.write_batch(batch))  # noqa: B023
             # opened with `tuned` on the first batch
-            timed("alp", lambda: cast("tpq.Writer", alp).write(batch))  # noqa: B023
+            timed("alp", lambda: cast("tpq.Writer", alp).write(batch))  # noqa: B023  # pragma: no mutate (typing only)
             timed("tparquet", lambda: auto.write(batch))  # noqa: B023
-        if tuned is None or alp is None:
+        if tuned is None:
             raise ValueError("the source has no rows")
         timed("zstd9", z9.close)
         timed("tuned", tuned.close)
-        timed("alp", alp.close)
+        # opened with `tuned`
+        timed("alp", cast("tpq.Writer", alp).close)  # pragma: no mutate (typing only)
         codecs = cast("dict[str, str]", timed("tparquet", auto.close))  # pragma: no mutate (typing only)
         for name in ("tuned", "alp", "tparquet"):
             difference = tpq.verify(paths["zstd9"], paths[name])

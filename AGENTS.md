@@ -15,7 +15,7 @@
 | `rust/tparquet` | high-level Rust API (auto selection, transcode) and the `tparquet` CLI |
 | `go/` | Go package: arrow-go codec plugin and writer helpers |
 | `python/` | Python package: pyarrow, pandas, Polars, DuckDB |
-| `duckdb/` | DuckDB loadable extension |
+| `duckdb/` | DuckDB extension: DuckDB's own parquet extension with PCODEC, a patch over DuckDB 1.5.6 and 2.0.0 (`duckdb/FORK.md`) |
 | `polars-tparquet/` | Polars plugin package: `scan_tparquet`, `read_tparquet`, `tparquet` namespaces |
 | `java/` | Maven: JNI binding, fork of parquet-java 1.17.0 (`java/parquet-java/FORK.md`), `tparquet` library, Spark data source |
 | `datafusion/` | DataFusion 55.2 connector, its own Cargo workspace on a fork of parquet 59.3.2 (`datafusion/parquet/FORK.md`) |
@@ -32,12 +32,13 @@
   format changes `spec/FORMAT.md` and the vectors in the same commit.
 - **Mutation testing.** Rust: `cargo mutants` (config in `.cargo/mutants.toml`); Go: `gremlins`;
   Python: `mutmut`; Java: PIT (`make -C java mutants`); C++: `cpp/mutation` (scripted mutants of
-  the Arrow fork). A surviving mutant is a missing test or dead code: add the test or remove the
-  code. Any exclusion carries a comment that says why.
+  the Arrow fork) and `duckdb/mutation` (of the DuckDB fork, `make -C duckdb mutation`). A
+  surviving mutant is a missing test or dead code: add the test or remove the code. Any
+  exclusion carries a comment that says why.
 - **The forks stay small.** Every change is listed in the fork's `FORK.md` and checked against
   upstream: `scripts/check-fork.sh` (`rust/parquet`, `datafusion/parquet`), `scripts/check-fork-java.sh`
   (`java/parquet-java`, `java/parquet-java-1.18`, `trino/trino-parquet`), `scripts/check-cpp-fork.sh`
-  (`cpp/arrow`).
+  (`cpp/arrow`), `scripts/check-duckdb-fork.sh` (`duckdb`).
 - **Decoders treat payloads as untrusted.** No panics, no unbounded allocation; fuzz targets in
   `rust/core/fuzz`.
 - Run the checks of what you changed before pushing (`make check` at the root runs everything).
