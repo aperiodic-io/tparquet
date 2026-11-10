@@ -71,10 +71,6 @@ final class Latent {
     return Long.compareUnsigned(a, b) < 0;
   }
 
-  static boolean le(long a, long b) {
-    return Long.compareUnsigned(a, b) <= 0;
-  }
-
   static long min(long a, long b) {
     return lt(b, a) ? b : a;
   }
@@ -109,21 +105,6 @@ final class Latent {
   /** {@code L::from_conv(s)}: the signed value truncated to the latent's width. */
   long fromConv(long s) {
     return s & mask;
-  }
-
-  static Latent ofBits(int bits) {
-    switch (bits) {
-      case 8:
-        return U8;
-      case 16:
-        return U16;
-      case 32:
-        return U32;
-      case 64:
-        return U64;
-      default:
-        throw new IllegalArgumentException("no latent of " + bits + " bits");
-    }
   }
 
   @Override

@@ -20,16 +20,27 @@ abstract class FloatType {
   final long quietBit;
   final long defaultNan;
 
-  private FloatType(int bits, int precisionBits, int expOffset, Latent latent) {
+  // the masks are given as constants, not derived (MathParityTest and ExhaustiveParityTest
+  // check every f16 and f32 bit pattern through them)
+  private FloatType(
+      int bits,
+      int precisionBits,
+      int expOffset,
+      Latent latent,
+      long signMask,
+      long absMask,
+      long expMask,
+      long quietBit,
+      long defaultNan) {
     this.bits = bits;
     this.precisionBits = precisionBits;
     this.expOffset = expOffset;
     this.latent = latent;
-    this.signMask = latent.mid;
-    this.absMask = latent.mid - 1;
-    this.expMask = absMask & ~((1L << precisionBits) - 1);
-    this.quietBit = 1L << (precisionBits - 1);
-    this.defaultNan = signMask | expMask | quietBit;
+    this.signMask = signMask;
+    this.absMask = absMask;
+    this.expMask = expMask;
+    this.quietBit = quietBit;
+    this.defaultNan = defaultNan;
   }
 
   static FloatType of(NumberType t) {
@@ -236,7 +247,9 @@ abstract class FloatType {
   // ------------------------------------------------------------ instances
 
   static final FloatType F64 =
-      new FloatType(64, 52, 1023, Latent.U64) {
+      new FloatType(
+          64, 52, 1023, Latent.U64, 0x8000000000000000L, 0x7fffffffffffffffL,
+          0x7ff0000000000000L, 0x0008000000000000L, 0xfff8000000000000L) {
         @Override
         double value(long x) {
           return Double.longBitsToDouble(x);
@@ -299,7 +312,7 @@ abstract class FloatType {
       };
 
   static final FloatType F32 =
-      new FloatType(32, 23, 127, Latent.U32) {
+      new FloatType(32, 23, 127, Latent.U32, 0x80000000L, 0x7fffffffL, 0x7f800000L, 0x00400000L, 0xffc00000L) {
         @Override
         double value(long x) {
           return Float.intBitsToFloat((int) x);
@@ -363,7 +376,7 @@ abstract class FloatType {
       };
 
   static final FloatType F16 =
-      new FloatType(16, 10, 15, Latent.U16) {
+      new FloatType(16, 10, 15, Latent.U16, 0x8000L, 0x7fffL, 0x7c00L, 0x0200L, 0xfe00L) {
         @Override
         double value(long x) {
           return f16ToF32((int) x);

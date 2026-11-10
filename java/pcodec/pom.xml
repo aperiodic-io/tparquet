@@ -126,6 +126,8 @@
             <param>io.aperiodic.pcodec.DeltaTest</param>
             <param>io.aperiodic.pcodec.RoundTripTest</param>
             <param>io.aperiodic.pcodec.MathVectorsTest</param>
+            <param>io.aperiodic.pcodec.ApiTest</param>
+            <param>io.aperiodic.pcodec.payload.PayloadUnitTest</param>
           </targetTests>
           <timestampedReports>false</timestampedReports>
           <outputFormats>

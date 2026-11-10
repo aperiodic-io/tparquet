@@ -96,8 +96,7 @@ final class Vectors {
         res.add(Oracle.compressRequest(c.type, cfg, c.nums));
       }
     }
-    base = res.size();
-    // targeted (compression only): each delta encoding, mode parameter, level and paging spec on data it suits
+    // targeted, decoded and corrupted too: conv1 of every order, and dict mode
     for (NumberType t : new NumberType[] {NumberType.U8, NumberType.I16, NumberType.U16, NumberType.I32, NumberType.U32}) {
       for (String shape : new String[] {"trend", "quadratic", "walk"}) {
         for (int n : new int[] {40, 515, 1100}) {
@@ -112,6 +111,35 @@ final class Vectors {
         }
       }
     }
+    for (NumberType t : new NumberType[] {NumberType.I32, NumberType.U64, NumberType.F64, NumberType.U16}) {
+      for (String shape : new String[] {"dictish", "small", "sparse"}) {
+        long[] nums = Corpus.generate(t, shape, 900, 7);
+        if (!ParityTest.dictReproducible(t, nums)) {
+          continue;
+        }
+        for (int delta : new int[] {0, 1}) {
+          Oracle.Cfg c = new Oracle.Cfg();
+          c.mode = 5;
+          c.delta = delta;
+          res.add(Oracle.compressRequest(t, c, nums));
+        }
+      }
+    }
+    base = res.size();
+    // targeted (compression only): large inputs whose histograms meet bad pivots
+    for (NumberType t : new NumberType[] {NumberType.I32, NumberType.U64}) {
+      for (String shape : new String[] {"dictish", "decimal", "bimodal", "constant", "spiky"}) {
+        long[] nums = Corpus.generate(t, shape, 10000, 0);
+        for (int level : new int[] {8, 12}) {
+          Oracle.Cfg c = new Oracle.Cfg();
+          c.mode = 1;
+          c.delta = 1;
+          c.level = level;
+          res.add(Oracle.compressRequest(t, c, nums));
+        }
+      }
+    }
+    // each other delta encoding, mode parameter, level and paging spec
     for (NumberType t : new NumberType[] {NumberType.I64, NumberType.F64, NumberType.U32, NumberType.F32}) {
       for (String shape : new String[] {"periodic", "dictish", "spiky", "steps"}) {
         for (int n : new int[] {20, 300, 1500}) {

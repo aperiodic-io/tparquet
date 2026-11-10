@@ -13,3 +13,15 @@
 9 26 0 524288 9c0676eb06d98030
 10 0 0 4296704 86ebfed8e485cb8b
 11 27 0 524288 db0d8da8828daf39
+special 0 a1b0eed212c96a46
+special 1 7ca034b7f76542cd
+special 2 16d2df25852e7991
+special 4 189c29fbad161830
+special 5 848d435b2f4a542f
+special 6 bb0c81e8099aea89
+special 7 6ac6f20c78c0378c
+special 8 991bd6cb1a8d1a2f
+special 9 ff3e8ce1fb238ddf
+special 10 aff9f8ec844945ab
+special 11 836f035549b7b134
+special 12 3ef358e3136b4c32

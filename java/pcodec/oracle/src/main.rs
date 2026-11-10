@@ -10,7 +10,9 @@
 //!   3 meta         dtype:u8 config values        -> Debug of the chunk meta of the first chunk
 //!   4 payload_enc  hint:u8 level:u8 decimal:u8 bytes -> tparquet_core::compress
 //!   5 payload_dec  expected_len:u64 bytes        -> tparquet_core::decompress
-//!   6 math         fn:u8 n:u32 f64s              -> f64s (0 log2, 1 cbrt, 2 10^x, 3 log10)
+//!   6 math         fn:u8 n:u32 f64s              -> u64s (0 log2, 1 cbrt, 2 10^x, 3 log10 as
+//!                  bits; 4..7 `as u64/u32/u16/i64`; 8, 9 round of f64, f32; 10, 11 the bits
+//!                  `as f64/f32`; 12 f16::from_f64)
 //!   7 f16          fn:u8 n:u32 values            -> values (0 f64 bits -> f16 bits by from_f64,
 //!                                                    1 f32 bits -> f16 bits by from_f32)
 //!   8 digest       fn:u8 seed:u64 start:u64 count:u64 -> digest:u64 of fn over inputs
@@ -226,13 +228,23 @@ fn handle(req: &[u8]) -> Res {
             let mut out = Vec::with_capacity(8 * n as usize);
             for _ in 0..n {
                 let x = c.f64();
-                let y = match f {
-                    0 => x.log2(),
-                    1 => x.cbrt(),
-                    2 => 10.0_f64.powf(x),
-                    _ => x.log10(),
+                let r = x.to_bits();
+                let y: u64 = match f {
+                    0 => x.log2().to_bits(),
+                    1 => x.cbrt().to_bits(),
+                    2 => 10.0_f64.powf(x).to_bits(),
+                    3 => x.log10().to_bits(),
+                    4 => x as u64,
+                    5 => u64::from(x as u32),
+                    6 => u64::from(x as u16),
+                    7 => x as i64 as u64,
+                    8 => if x.is_nan() { 0 } else { x.round().to_bits() },
+                    9 => { let y = x as f32; if y.is_nan() { 0 } else { u64::from(y.round().to_bits()) } }
+                    10 => (r as f64).to_bits(),
+                    11 => u64::from((r as f32).to_bits()),
+                    _ => u64::from(f16::from_f64(x).to_bits()),
                 };
-                out.extend_from_slice(&y.to_bits().to_le_bytes());
+                out.extend_from_slice(&y.to_le_bytes());
             }
             Ok(out)
         }

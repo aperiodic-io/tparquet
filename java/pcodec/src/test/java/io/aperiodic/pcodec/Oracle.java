@@ -287,6 +287,21 @@ final class Oracle implements AutoCloseable {
     return res;
   }
 
+  /** math as raw u64 results (op 6) */
+  long[] mathBits(int fn, double[] xs) {
+    ByteBuffer b = buf(6 + 8 * xs.length);
+    b.put((byte) 6).put((byte) fn).putInt(xs.length);
+    for (double x : xs) {
+      b.putDouble(x);
+    }
+    ByteBuffer r = ByteBuffer.wrap(call(b.array()).body).order(ByteOrder.LITTLE_ENDIAN);
+    long[] res = new long[xs.length];
+    for (int i = 0; i < res.length; i++) {
+      res[i] = r.getLong();
+    }
+    return res;
+  }
+
   /** f16 conversions: fn 0 takes f64 values (as bits), fn 1 f32 bits */
   int[] f16(int fn, long[] xs) {
     ByteBuffer b = buf(6 + 8 * xs.length);

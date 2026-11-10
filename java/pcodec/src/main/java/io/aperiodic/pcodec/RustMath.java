@@ -134,9 +134,4 @@ final class RustMath {
     y ^= (y >> 63) >>> 1;
     return Long.compare(x, y);
   }
-
-  /** {@code (n as f64).log2().floor() as u32} for a count n (exact for integers below 2^53). */
-  static int floorLog2(long n) {
-    return n <= 0 ? 0 : 63 - Long.numberOfLeadingZeros(n);
-  }
 }

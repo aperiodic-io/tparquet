@@ -48,10 +48,6 @@ final class BitWriter {
     bitIdx = (bitIdx + 7) & ~7L;
   }
 
-  long bitIdx() {
-    return bitIdx;
-  }
-
   /** The bytes written so far (the last one partial if not aligned). */
   byte[] toByteArray() {
     return Arrays.copyOf(buf, (int) ((bitIdx + 7) >>> 3));
