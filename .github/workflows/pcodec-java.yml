@@ -92,3 +92,17 @@ jobs:
         run: pip install z3-solver==4.13.0.0
       - name: the SMT proofs
         run: make -C java/pcodec proofs
+
+  mutation:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: PIT on the library, judged by the suites that need no oracle (threshold in pom.xml)
+        run: make -C java/pcodec mutants

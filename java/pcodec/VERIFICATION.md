@@ -109,6 +109,10 @@ first input.
 | `f64::cbrt` | 2M random positive doubles, 8M probabilities | equal |
 | `10.0_f64.powf(k)` (glibc pow) | every integer k in -400..400, the whole domain pcodec uses | equal |
 | Rust casts and rounding (`as u64/i64/u32/u16`, `round`, `u64 as f64/f32`, `f64 as f16`) | 2M random bit patterns each | equal |
+| all of the above | about 2,000 special values each: zeros, subnormals, rounding ties, cast limits, infinities, NaNs, exact cubes, and cbrt's hard cases (inputs that take CORE-MATH's refinement path, found by search) | equal |
+
+`vectors/math.txt` records the reference's digests on slices of these domains and on the
+special values, so that builds without Rust (`MathVectorsTest`) check them too.
 
 These functions matter because pcodec's heuristics depend on them. `log2` of bin weights sets
 the size estimates that choose the delta encoding. `cbrt` and `log2` of probabilities score
@@ -141,6 +145,7 @@ is covered. At scale 1 (each CI run; the weekly run is at scale 8):
 | Suite | Cases | Of which the reference refuses |
 |---|---:|---:|
 | default configuration, every type, shape and size, and decoding each file back | 20,328 | 0 |
+| chunk metadata (mode, delta encoding, every bin, ANS table sizes), compared as the reference's `Debug` prints it | 961 | 408 |
 | every level 0..13 | 11,880 | 440 (level 13) |
 | every mode spec, legal and illegal parameters | 60,896 | 34,672 |
 | every delta spec, including conv1 up to order 33 | 53,334 | 6,072 errors, 1,578 panics |
@@ -155,18 +160,32 @@ Every case agrees: the same status (ok, error, panic), and when ok the same byte
 
 ## 6. Recorded vectors, conformance files, mutation testing
 
-- `vectors/pco-1.0.4.bin.gz`: 6,767 recorded requests and answers of the reference. They cover
-  compression under random configurations, decoding, decoding corrupted files, and targeted
-  cases for every conv1 order, lookback and consecutive delta, mode parameter, level and paging
-  spec. `VectorsTest` replays them
-  without Rust. CI re-records them and fails if a byte changes.
+- `vectors/pco-1.0.4.bin.gz`: 8,105 recorded requests and answers of the reference. They cover
+  compression under random configurations, chunk metadata, decoding, decoding corrupted files,
+  and targeted cases: every conv1 order and dict mode (decoded and corrupted too), lookback and
+  consecutive deltas, mode parameters, levels, paging specs, and large inputs whose histograms
+  meet bad pivots. `VectorsTest` replays them without Rust. CI re-records them and
+  `vectors/math.txt` and fails if a byte changes.
 - `testdata/payloads` (`PayloadVectorsTest`): every valid vector decodes, every invalid one is
   refused, and every vector the reference encoder wrote is what the Java encoder writes.
 - `testdata/files` (`ParquetFilesTest`): every PCODEC page of every Parquet file decodes to the
   reference's bytes, the payload modes per column are those of the manifest, and re-encoding
   each page gives back its payload byte for byte (ZSTD pages excepted).
-- PIT (`make mutants`) mutates the library and runs the suites that need no oracle against each
-  mutant. A mutant that survives is a change to the code those suites cannot see.
+- PIT (`make mutants`, and the `mutation` CI job) mutates the library and runs the suites that
+  need no oracle against each mutant: the vectors, unit tests and round trips. A mutant that
+  survives is a change to the code those suites cannot see. Each round of survivors so far was a
+  missing test or dead code, and was fixed: targeted vectors, math special values, unit tests,
+  dead code removed. That took the score from 87% to 91% (2,575 of 2,825 mutants). The build fails below 90%.
+  The remaining survivors fall into three groups:
+  - the decision margins of the mode and delta heuristics (a comparison mutated from `<` to `<=`,
+    or a constant changed, that no recorded input sits close enough to the threshold to show);
+  - CORE-MATH's rounding corrections in `cbrt`, which only change exact cubes and the hardest
+    cases;
+  - bounds checks that a later check duplicates, which change the error a corrupt input gets but
+    not whether it is refused.
+
+  `hashCode` is excluded, since any constant satisfies its contract. PIT cannot afford the
+  oracle-backed suites, which judge the first group on every CI run.
 
 ## Differences found
 
