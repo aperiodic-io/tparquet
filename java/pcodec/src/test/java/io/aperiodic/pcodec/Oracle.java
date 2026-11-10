@@ -62,6 +62,19 @@ final class Oracle implements AutoCloseable {
   private final OutputStream out;
   private final DataInputStream in;
 
+  /** a new oracle process (its own HashMap seeds), or null when not built */
+  static Oracle start() {
+    String path = System.getProperty("pcodec.oracle", "oracle/target/release/pcodec-oracle");
+    if (!new File(path).canExecute()) {
+      return null;
+    }
+    try {
+      return new Oracle(path);
+    } catch (IOException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
   private Oracle(String path) throws IOException {
     process = new ProcessBuilder(path).redirectError(ProcessBuilder.Redirect.INHERIT).start();
     out = new BufferedOutputStream(process.getOutputStream(), 1 << 16);
@@ -158,6 +171,25 @@ final class Oracle implements AutoCloseable {
     public String toString() {
       return toConfig().toString();
     }
+
+    /** the inverse of the wire format written by compress */
+    static Cfg parse(ByteBuffer b) {
+      Cfg c = new Cfg();
+      c.level = b.getInt();
+      c.mode = b.get();
+      c.modeF64 = b.getDouble();
+      c.modeK = b.getInt();
+      c.modeBase = b.getLong();
+      c.delta = b.get();
+      c.deltaOrder = b.getLong();
+      c.paging = b.get();
+      c.pagingValues = new long[b.getInt()];
+      for (int i = 0; i < c.pagingValues.length; i++) {
+        c.pagingValues[i] = b.getLong();
+      }
+      c.enable8Bit = b.get() != 0;
+      return c;
+    }
   }
 
   private static ByteBuffer buf(int n) {
@@ -188,7 +220,7 @@ final class Oracle implements AutoCloseable {
     return res;
   }
 
-  private byte[] withConfig(int op, NumberType t, Cfg c, long[] nums) {
+  private static byte[] withConfig(int op, NumberType t, Cfg c, long[] nums) {
     byte[] raw = rawBytes(t, nums);
     ByteBuffer b = buf(2 + 4 + 1 + 8 + 4 + 8 + 1 + 8 + 1 + 4 + 8 * c.pagingValues.length + 1 + raw.length);
     b.put((byte) op).put((byte) t.typeByte);
@@ -205,6 +237,16 @@ final class Oracle implements AutoCloseable {
 
   Answer compress(NumberType t, Cfg c, long[] nums) {
     return call(withConfig(1, t, c, nums));
+  }
+
+  static byte[] compressRequest(NumberType t, Cfg c, long[] nums) {
+    return withConfig(1, t, c, nums);
+  }
+
+  static byte[] decompressRequest(NumberType t, byte[] file) {
+    ByteBuffer b = buf(2 + file.length);
+    b.put((byte) 2).put((byte) t.typeByte).put(file);
+    return b.array();
   }
 
   Answer meta(NumberType t, Cfg c, long[] nums) {

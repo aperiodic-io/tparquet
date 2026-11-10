@@ -260,7 +260,9 @@ final class ChunkDecompressor {
       default:
         {
           long[] dict = meta.mode.dict;
-          for (int i = 0; i < batchN; i++) {
+          // the reference checks the whole scratch array, past the batch too (stale entries of
+          // an earlier batch, or zeros)
+          for (int i = 0; i < primary.length; i++) {
             if (Long.compareUnsigned(primary[i], dict.length) >= 0) {
               throw PcoException.corruption("dict index exceeded dict length " + dict.length);
             }

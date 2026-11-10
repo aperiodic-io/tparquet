@@ -262,17 +262,19 @@ class ParityTest {
     assumeTrue(o != null, "oracle not built");
     Report rep = new Report();
     SplittableRandom r = new SplittableRandom(4);
-    for (Corpus.Case c : Corpus.cases(ALL, new int[] {1, 30, 300, 1500}, scale)) {
-      Oracle.Cfg cfg = new Oracle.Cfg();
+    for (Corpus.Case c : Corpus.cases(ALL, new int[] {1, 30, 300, 1500}, 2 * scale)) {
+      Oracle.Cfg[] modes = modeSpecs(c.type, r);
+      Oracle.Cfg[] deltas = deltaSpecs();
+      Oracle.Cfg cfg = modes[r.nextInt(modes.length)];
+      Oracle.Cfg d = deltas[r.nextInt(deltas.length)];
       cfg.enable8Bit = true;
-      cfg.delta = r.nextInt(5);
-      cfg.deltaOrder = 1 + r.nextInt(7);
-      cfg.mode = r.nextInt(5);
+      cfg.delta = d.delta;
+      cfg.deltaOrder = d.deltaOrder;
       Oracle.Answer good = o.compress(c.type, cfg, c.nums);
       if (!good.ok()) {
         continue;
       }
-      for (int k = 0; k < 12; k++) {
+      for (int k = 0; k < 24; k++) {
         byte[] bad = good.body.clone();
         switch (r.nextInt(4)) {
           case 0:

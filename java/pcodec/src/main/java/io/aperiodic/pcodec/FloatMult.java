@@ -190,25 +190,8 @@ final class FloatMult {
     return f.sub(base, f.div(tweakSum, tweakWeight));
   }
 
-  /** {@code 10.0_f64.powf(k)} for an integer-valued (or infinite, NaN) k */
   static double pow10(double k) {
-    if (Double.isNaN(k)) {
-      return Double.NaN;
-    }
-    if (k == Double.POSITIVE_INFINITY) {
-      return Double.POSITIVE_INFINITY;
-    }
-    if (k == Double.NEGATIVE_INFINITY) {
-      return 0.0;
-    }
-    if (k > 400) {
-      return Double.POSITIVE_INFINITY;
-    }
-    if (k < -400) {
-      return 0.0;
-    }
-    int e = (int) k;
-    return new java.math.BigDecimal(java.math.BigInteger.ONE, -e).doubleValue();
+    return GlibcMath.pow10(k);
   }
 
   static Config snapToIntReciprocal(FloatType f, long base) {

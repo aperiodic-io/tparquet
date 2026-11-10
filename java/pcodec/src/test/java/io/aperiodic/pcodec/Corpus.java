@@ -46,6 +46,18 @@ final class Corpus {
     }
   }
 
+  /** a standard normal deviate (Marsaglia's polar method), the same on every JDK */
+  static double gauss(SplittableRandom r) {
+    while (true) {
+      double u = 2 * r.nextDouble() - 1;
+      double v = 2 * r.nextDouble() - 1;
+      double s = u * u + v * v;
+      if (s > 0 && s < 1) {
+        return u * StrictMath.sqrt(-2 * StrictMath.log(s) / s);
+      }
+    }
+  }
+
   static long mask(NumberType t, long x) {
     return t.bits() == 64 ? x : x & ((1L << t.bits()) - 1);
   }
@@ -144,7 +156,7 @@ final class Corpus {
           double x = r.nextDouble() * 100;
           long y = r.nextLong() >> (64 - Math.min(bits, 40));
           for (int i = 0; i < n; i++) {
-            x += r.nextGaussian();
+            x += Corpus.gauss(r);
             y += r.nextInt(201) - 100;
             v[i] = fl ? fromDouble(t, x) : fromLong(t, y);
           }
@@ -154,7 +166,7 @@ final class Corpus {
         {
           double a = r.nextDouble() * 5;
           for (int i = 0; i < n; i++) {
-            double x = 1000 + a * i + 30 * Math.sin(i / 17.0) + r.nextGaussian();
+            double x = 1000 + a * i + 30 * Math.sin(i / 17.0) + Corpus.gauss(r);
             v[i] = fl ? fromDouble(t, x) : fromLong(t, Math.round(x));
           }
           break;
@@ -210,7 +222,7 @@ final class Corpus {
             dict[i] = fl ? fromDouble(t, r.nextDouble() * 1e6) : mask(t, r.nextLong());
           }
           for (int i = 0; i < n; i++) {
-            v[i] = dict[Math.min(dict.length - 1, (int) Math.abs(r.nextGaussian() * dict.length / 3))];
+            v[i] = dict[Math.min(dict.length - 1, (int) Math.abs(Corpus.gauss(r) * dict.length / 3))];
           }
           break;
         }
@@ -219,7 +231,7 @@ final class Corpus {
           int digits = r.nextInt(5);
           double p = Math.pow(10, digits);
           for (int i = 0; i < n; i++) {
-            double x = Math.round((100 + r.nextGaussian() * 20) * p) / p;
+            double x = Math.round((100 + Corpus.gauss(r) * 20) * p) / p;
             v[i] = fl ? fromDouble(t, x) : fromLong(t, (long) (x * p));
           }
           break;
@@ -237,7 +249,7 @@ final class Corpus {
         {
           int k = fl ? 1 + r.nextInt(FloatType.of(t).precisionBits) : 4;
           for (int i = 0; i < n; i++) {
-            long x = fl ? fromDouble(t, r.nextGaussian() * 1000) : mask(t, r.nextLong());
+            long x = fl ? fromDouble(t, Corpus.gauss(r) * 1000) : mask(t, r.nextLong());
             long low = r.nextInt(100) == 0 ? 1 : 0;
             v[i] = mask(t, (x >>> k << k) | low);
           }
@@ -245,7 +257,7 @@ final class Corpus {
         }
       case "special":
         for (int i = 0; i < n; i++) {
-          v[i] = r.nextInt(3) == 0 ? special(t, r) : (fl ? fromDouble(t, r.nextGaussian()) : mask(t, r.nextInt(1000)));
+          v[i] = r.nextInt(3) == 0 ? special(t, r) : (fl ? fromDouble(t, Corpus.gauss(r)) : mask(t, r.nextInt(1000)));
         }
         break;
       case "sorted":
@@ -285,7 +297,7 @@ final class Corpus {
         }
       case "bimodal":
         for (int i = 0; i < n; i++) {
-          double x = r.nextBoolean() ? r.nextGaussian() : 1e6 + r.nextGaussian() * 10;
+          double x = r.nextBoolean() ? Corpus.gauss(r) : 1e6 + Corpus.gauss(r) * 10;
           v[i] = fl ? fromDouble(t, x) : fromLong(t, (long) (x * (scale / 1e7)));
         }
         break;

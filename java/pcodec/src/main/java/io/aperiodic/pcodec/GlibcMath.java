@@ -7,8 +7,9 @@ package io.aperiodic.pcodec;
  *
  * <p>{@link #log2} is glibc's {@code __log2_fma}, the variant glibc's ifunc selects on CPUs with
  * FMA and AVX2 (every x86-64 CI runner), transcribed from the compiled code, where GCC contracted
- * more multiply-adds than the C source shows. {@link #cbrt} is {@code sysdeps/ieee754/dbl-64/s_cbrt.c}
- * (compiled without FMA). VERIFICATION.md says how both are checked against the reference.
+ * more multiply-adds than the C source shows. {@link #cbrt} is not glibc's (see there), and
+ * {@link #pow10} is glibc's pow on the integer exponents pcodec gives it. VERIFICATION.md says
+ * how each is checked against the reference.
  */
 final class GlibcMath {
   private GlibcMath() {}
@@ -175,42 +176,131 @@ final class GlibcMath {
     return y + hi;
   }
 
-  private static final double CBRT2 = 1.2599210498948731648;
-  private static final double SQR_CBRT2 = 1.5874010519681994748;
-  private static final double[] FACTOR = {1.0 / SQR_CBRT2, 1.0 / CBRT2, 1.0, CBRT2, SQR_CBRT2};
+  // ------------------------------------------------------------ cbrt
 
+  private static final double[] ESCALE = {1.0, 0x1.428a2f98d728bp+0, 0x1.965fea53d6e3dp+0};
+  private static final double[] CC = {
+    0x1.1b0babccfef9cp-1, 0x1.2c9a3e94d1da5p-1, -0x1.4dc30b1a1ddbap-3, 0x1.7a8d3e4ec9b07p-6
+  };
+  private static final double[] RSC = {1.0, -1.0, 0.5, -0.5, 0.25, -0.25};
+
+  /**
+   * Rust's {@code f64::cbrt}, which is not glibc's: the toolchain links its own {@code cbrt}
+   * from {@code compiler_builtins} (the libm crate's port of CORE-MATH's correctly rounded
+   * cbrt). This is that port, rounding to nearest.
+   */
   static double cbrt(double x) {
-    double ax = Math.abs(x);
-    if (ax == 0.0 || Double.isNaN(x) || Double.isInfinite(x)) {
-      return x + x;
+    final long sigMask = (1L << 52) - 1;
+    final double u0 = 0x1.5555555555555p-2;
+    final double u1 = 0x1.c71c71c71c71cp-3;
+    long hx = Double.doubleToRawLongBits(x);
+    long mant = hx & sigMask;
+    long sign = hx >>> 63;
+    int e = (int) (hx >>> 52) & 0x7ff;
+    if (((e + 1) & 0x7ff) < 2) {
+      long ix = hx & 0x7fffffffffffffffL;
+      if (e == 0x7ff || ix == 0) {
+        return x + x;
+      }
+      int nz = Long.numberOfLeadingZeros(ix) - 11;
+      mant <<= nz;
+      mant &= sigMask;
+      e = e - (nz - 1);
     }
-    // frexp: ax = xm * 2^xe with xm in [0.5, 1)
-    int xe;
-    double xm;
-    if (Math.getExponent(ax) == Double.MIN_EXPONENT - 1) {
-      double s = ax * 0x1p54;
-      xe = Math.getExponent(s) + 1 - 54;
-      xm = Double.longBitsToDouble(
-          (Double.doubleToRawLongBits(s) & 0x800fffffffffffffL) | 0x3fe0000000000000L);
-    } else {
-      xe = Math.getExponent(ax) + 1;
-      xm = Double.longBitsToDouble(
-          (Double.doubleToRawLongBits(ax) & 0x800fffffffffffffL) | 0x3fe0000000000000L);
+    e = e + 3072;
+    long cvt1 = mant | (0x3ffL << 52);
+    long cvt5 = cvt1;
+    int et = Integer.divideUnsigned(e, 3);
+    int it = Integer.remainderUnsigned(e, 3);
+    cvt5 += ((long) it) << 52;
+    cvt5 |= sign << 63;
+    double zz = Double.longBitsToDouble(cvt5);
+    long isc = Double.doubleToRawLongBits(ESCALE[it]);
+    isc |= sign << 63;
+    double z = Double.longBitsToDouble(cvt1);
+    double r = 1.0 / z;
+    double rr = r * RSC[(it << 1) | (int) sign];
+    double z2 = z * z;
+    double c0 = CC[0] + z * CC[1];
+    double c2 = CC[2] + z * CC[3];
+    double y = c0 + z2 * c2;
+    double y2 = y * y;
+    double h = y2 * (y * r) - 1.0;
+    y -= (h * y) * (u0 - u1 * h);
+    y *= Double.longBitsToDouble(isc);
+    y2 = y * y;
+    double y2l = Math.fma(y, y, -y2);
+    double y3 = y2 * y;
+    double y3l = Math.fma(y, y2, -y3) + y * y2l;
+    h = ((y3 - zz) + y3l) * rr;
+    double dy = h * (y * u0);
+    double y1 = y - dy;
+    dy = (y - y1) - dy;
+    double ady = Math.abs(dy);
+    double off = 0x1p-53;
+    double ady0 = Math.abs(ady - off);
+    double ady1 = Math.abs(ady - (0x1p-52 + off));
+    if (ady0 < 0x1p-75 || ady1 < 0x1p-75) {
+      y2 = y1 * y1;
+      y2l = Math.fma(y1, y1, -y2);
+      y3 = y2 * y1;
+      y3l = Math.fma(y1, y2, -y3) + y1 * y2l;
+      h = ((y3 - zz) + y3l) * rr;
+      dy = h * (y1 * u0);
+      y = y1 - dy;
+      dy = (y1 - y) - dy;
+      y1 = y;
+      ady = Math.abs(dy);
+      ady0 = Math.abs(ady - off);
+      ady1 = Math.abs(ady - (0x1p-52 + off));
+      if (ady0 < 0x1p-98 || ady1 < 0x1p-98) {
+        double azz = Math.abs(zz);
+        if (azz == 0x1.9b78223aa307cp+1) {
+          y1 = Math.copySign(0x1.79d15d0e8d59cp+0, zz);
+        }
+        if (azz == 0x1.a202bfc89ddffp+2) {
+          y1 = Math.copySign(0x1.de87aa837820fp+0, zz);
+        }
+      }
     }
-    double u =
-        (0.354895765043919860
-            + ((1.50819193781584896
-                    + ((-2.11499494167371287
-                            + ((2.44693122563534430
-                                    + ((-1.83469277483613086
-                                            + (0.784932344976639262 - 0.145263899385486377 * xm)
-                                                * xm)
-                                        * xm))
-                                * xm))
-                        * xm))
-                * xm));
-    double t2 = u * u * u;
-    double ym = u * (t2 + 2.0 * xm) / (2.0 * t2 + xm) * FACTOR[2 + xe % 3];
-    return Math.scalb(x > 0.0 ? ym : -ym, xe / 3);
+    long cvt3 = Double.doubleToRawLongBits(y1);
+    cvt3 = cvt3 + (((long) (et - 342 - 1023)) << 52);
+    long m0 = cvt3 << 30;
+    long m1 = m0 >>> 63;
+    if (Long.compareUnsigned(m0 ^ m1, 1L << 30) <= 0) {
+      long cvt4 = Double.doubleToRawLongBits(y1);
+      cvt4 = (cvt4 + (164L << 15)) & 0xffffffffffff0000L;
+      if (Math.abs((Double.longBitsToDouble(cvt4) - y1) - dy) < 0x1p-60 || Math.abs(zz) == 1.0) {
+        cvt3 = (cvt3 + (1L << 15)) & 0xffffffffffff0000L;
+      }
+    }
+    return Double.longBitsToDouble(cvt3);
+  }
+
+  // ------------------------------------------------------------ pow(10, k)
+
+  /**
+   * {@code 10.0_f64.powf(k)} (glibc's pow) for integer-valued k: the correctly rounded power,
+   * except where glibc's pow, accurate to 0.52 ULP, rounds the other way. That happens at two
+   * exponents of the domain; MathParityTest checks every integer k from -400 to 400.
+   */
+  static double pow10(double k) {
+    if (Double.isNaN(k)) {
+      return Double.NaN;
+    }
+    if (k > 400) {
+      return Double.POSITIVE_INFINITY;
+    }
+    if (k < -400) {
+      return 0.0;
+    }
+    int e = (int) k;
+    if (e == 23) {
+      return Double.longBitsToDouble(0x44b52d02c7e14af7L);
+    }
+    if (e == 210) {
+      return Double.longBitsToDouble(0x6b88557f31326bbcL);
+    }
+    return new java.math.BigDecimal(java.math.BigInteger.ONE, -e).doubleValue();
   }
 }

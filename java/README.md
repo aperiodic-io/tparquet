@@ -6,6 +6,7 @@ from Java and Spark, and anything else built on parquet-java.
 | Module | Artifact | What |
 |---|---|---|
 | [`tparquet-jni`](tparquet-jni) | `io.aperiodic.tparquet:tparquet-jni` | the PCODEC payload codec over JNI ([`rust/jni`](../rust/jni)); no Parquet dependency |
+| [`pcodec`](pcodec) | `io.aperiodic.tparquet:pcodec-java` | pure Java pcodec 1.0.4 and the PCODEC payload, without native code, byte for byte the Rust reference's ([`VERIFICATION.md`](pcodec/VERIFICATION.md)); its own Maven project, outside this reactor |
 | [`parquet-java`](parquet-java) | `org.apache.parquet:parquet-{format-structures,common,hadoop}:1.17.0-tparquet` | a small fork of parquet-java 1.17.0 that adds the codec; changes listed in [`FORK.md`](parquet-java/FORK.md) |
 | [`parquet-java-1.18`](parquet-java-1.18) | `org.apache.parquet:parquet-{format-structures,common}:1.18.1-tparquet` | the codec id in parquet-java 1.18.1, for Trino 484 ([`../trino`](../trino)); changes in [`FORK.md`](parquet-java-1.18/FORK.md) |
 | [`tparquet`](tparquet) | `io.aperiodic.tparquet:tparquet` | `TparquetWriter` (spec section 3's writer recommendations), `TparquetReader`, `Canonical` (rows as canonical JSON), `Inspect` (page modes), the `Vectors` CLI |
