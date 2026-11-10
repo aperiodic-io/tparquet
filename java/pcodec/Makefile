@@ -9,6 +9,8 @@ ORACLE := oracle/target/release/pcodec-oracle
 
 oracle:
 	cargo build --release --manifest-path oracle/Cargo.toml
+	oracle-traced/prepare.sh
+	cargo build --release --manifest-path oracle-traced/Cargo.toml
 
 # without the oracle: unit tests, round trips, the shared testdata/payloads vectors and the
 # recorded golden vectors (the oracle-backed suites skip)

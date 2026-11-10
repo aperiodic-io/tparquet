@@ -212,23 +212,36 @@ layers found, all fixed:
 
 ## Limits
 
-**Nondeterminism of the reference.** pco 1.0.4 iterates Rust `HashMap`s, whose order is seeded
-per process, in three heuristics:
+**Nondeterminism of the reference, and how it is still verified.** pco 1.0.4 iterates Rust
+`HashMap`s, whose order is seeded per process, in three heuristics. Its output can therefore
+depend on the process, not only on the input. Each case is verified as follows:
 
-- **Dict mode** orders dictionary values of equal counts by HashMap order. Its output varies
-  between runs of the reference itself whenever counts tie.
-- **IntMult** picks the best-scoring GCD candidate. Among exactly equal scores it takes the last
-  in HashMap order.
-- **The bits-saved estimates** of IntMult, FloatMult and FloatQuant sum the savings of
-  infrequent values in HashMap order. A floating-point sum depends on order in its last bits,
-  and the estimate is compared with a threshold.
+- **Dict mode** orders dictionary values of equal counts by HashMap order. Its bytes vary
+  between reference processes when counts tie.
+  - `DictParityTest` uses a traced reference (`oracle-traced/`). This is pco 1.0.4 as published,
+    plus one statement that records the dictionary it chose, and `prepare.sh` checks that the
+    diff is exactly that. The test gives the Java encoder the reference's dictionary order and
+    requires the reference's bytes. Every case agrees: 5,808 at scale 1, tied counts and
+    fallbacks included.
+  - With that, Dict mode is verified completely, conditioned on the one choice the reference
+    leaves to chance. Java's own default for that choice is first appearance.
+- **IntMult** picks the best-scoring GCD and breaks equal scores in HashMap order.
+- **The bits-saved estimates** of IntMult, FloatMult and FloatQuant sum terms in HashMap order.
 
-pcodec-java uses first-appearance order in all three. Outside Dict ties, a difference needs a
-score tie or an estimate within rounding of its threshold. That did not happen once in the
-cases above. `ReferenceDeterminismTest` runs cases through several reference processes and
-checks that the Java output equals the reference's wherever the reference agrees with itself.
-The parity suites compare Dict mode only on inputs without tied counts. On the rest, no single
-"reference output" exists to match.
+  For these two, `Modes.Margins` (a verification hook that is off in production) does the
+  following on every input the parity suites compress, and on `OrderIndependenceTest`'s corpus:
+  - It computes each sum exactly, with Higham's bound on the error of any summation order. The
+    bound is zero when all terms are multiples of a common power of two and every partial sum is
+    exact.
+  - It checks that every decision taken on an estimate lies on one side of its threshold for
+    every order. Those decisions are a threshold, the choice between FloatMult candidates, and
+    the winning bid.
+  - It checks that every IntMult score tie leads to the same outcome, whichever tied candidate
+    is taken.
+
+  Every parity case passes, and so do the 19,360 corpus cases at scale 8. On those inputs the
+  reference has exactly one possible output, whatever its HashMap seeds, and the Java output
+  equals it.
 
 **Platform of the reference.** The reference's output depends on its platform in the same
 heuristics:
@@ -242,9 +255,15 @@ runners) and a stable Rust toolchain. A reference built for another platform (ma
 aarch64 without F16C) can itself produce different bytes for the same input. Decoding does not
 depend on the platform, except FloatMult's NaN payloads.
 
-**ZSTD mode.** The bytes of a ZSTD payload are the Zstandard library's. `PcodecPayload` takes
-Zstandard as a plug-in (`ZstdCodec`), and its parity covers decoding only.
+**ZSTD mode is not pcodec.** A ZSTD payload (FORMAT.md 4.4) is a Zstandard frame from libzstd,
+the payload format's fallback for pages pcodec does not model, and the upstream profile drops
+it (spec/UPSTREAM.md). Its bytes are libzstd's, so a pure Java pcodec cannot reproduce them;
+that would take a byte-exact port of libzstd 1.5.7. `PcodecPayload` takes Zstandard as a
+plug-in (`ZstdCodec`), and ZSTD decoding is verified (the conformance vectors, with a pure Java
+Zstandard). Every pcodec byte is verified, in PCO and DECIMAL payloads and in the standalone
+format.
 
 **Bounds.** The proofs and the exhaustive domains are complete within their bounds. Beyond them
-(long inputs, wide types), the evidence is differential testing and the inductive structure of
-the code, which processes long inputs in 256-number batches using the same functions.
+(long inputs, wide types), the evidence is the differential testing above, about 1.3 million
+cases at the weekly scale. The structure of the code supports it: long inputs go through the
+same functions in 256-number batches.

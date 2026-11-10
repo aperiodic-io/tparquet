@@ -11,6 +11,10 @@ rust-version = "1.88"
 license = "Apache-2.0"
 publish = false
 
+[features]
+# the op that reports Dict mode's dictionary; only the traced build (../oracle-traced) has it
+trace = []
+
 [dependencies]
 pco = "=1.0.4"
 half = "2"

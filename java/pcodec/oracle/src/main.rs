@@ -21,6 +21,8 @@
 //!                  -> digest:u64 of compress over sequences start..start+count of alphabet^len
 //!  11 bench        dtype:u8 config iterations:u32 values -> compress_ns:u64 decompress_ns:u64
 //!                  (the fastest of the iterations)
+//!  13 trace        dtype:u8 config values -> n_dict:u32 dict:u64* compressed (only with the
+//!                  `trace` feature: the dictionary Dict mode chose, in order)
 //!  10 all_decode   dtype:u8 n_prefix:u32 prefix suffix_len:u32 start:u64 count:u64
 //!                  -> digest:u64 of decompress over prefix ++ suffix, suffixes in order
 //!
@@ -320,6 +322,20 @@ fn handle(req: &[u8]) -> Res {
             let iterations = c.u32();
             let b = c.rest();
             by_dtype!(dtype, bench(&cfg, iterations, b))
+        }
+        #[cfg(feature = "trace")]
+        13 => {
+            let dtype = c.u8();
+            let cfg = config(&mut c);
+            pco::TRACE_DICT.with(|t| t.borrow_mut().clear());
+            let file = by_dtype!(dtype, compress(&cfg, c.rest()))?;
+            let dict = pco::TRACE_DICT.with(|t| t.borrow().clone());
+            let mut out = (dict.len() as u32).to_le_bytes().to_vec();
+            for x in dict {
+                out.extend_from_slice(&x.to_le_bytes());
+            }
+            out.extend_from_slice(&file);
+            Ok(out)
         }
         op => Err(format!("unknown op {op}")),
     }

@@ -32,6 +32,7 @@
     <!-- the Rust reference oracle (oracle/), built by `make -C java/pcodec oracle`; parity tests
          that need it are skipped when it is absent, unless pcodec.oracle.required is true -->
     <pcodec.oracle>${project.basedir}/oracle/target/release/pcodec-oracle</pcodec.oracle>
+    <pcodec.oracle.traced>${project.basedir}/oracle-traced/target/release/pcodec-oracle-traced</pcodec.oracle.traced>
     <pcodec.oracle.required>false</pcodec.oracle.required>
     <!-- scale of the randomized parity suites (cases per property) -->
     <pcodec.parity.scale>1</pcodec.parity.scale>
@@ -81,6 +82,7 @@
             <tparquet.testdata>${tparquet.root}/testdata</tparquet.testdata>
             <pcodec.vectors>${project.basedir}/vectors</pcodec.vectors>
             <pcodec.oracle>${pcodec.oracle}</pcodec.oracle>
+            <pcodec.oracle.traced>${pcodec.oracle.traced}</pcodec.oracle.traced>
             <pcodec.oracle.required>${pcodec.oracle.required}</pcodec.oracle.required>
             <pcodec.parity.scale>${pcodec.parity.scale}</pcodec.parity.scale>
           </systemPropertyVariables>

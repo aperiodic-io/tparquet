@@ -38,6 +38,9 @@ class ParityTest {
       if (d != null) {
         fails.add(what + ": " + d);
       }
+      if (!fails.isEmpty() && Boolean.getBoolean("pcodec.failfast")) {
+        done();
+      }
     }
 
     void done() {
@@ -56,7 +59,18 @@ class ParityTest {
 
   static void compress(Report rep, NumberType t, Oracle.Cfg cfg, long[] nums, String what) {
     Oracle.Answer want = o.compress(t, cfg, nums);
-    Parity.Outcome got = Parity.java(() -> Pco.compress(t, nums, cfg.toConfig()));
+    // the reference's output must be unique: no decision may depend on its HashMap order
+    Modes.Margins.start();
+    Parity.Outcome got;
+    int ambiguous;
+    try {
+      got = Parity.java(() -> Pco.compress(t, nums, cfg.toConfig()));
+    } finally {
+      ambiguous = Modes.Margins.stop();
+    }
+    if (ambiguous > 0) {
+      rep.fails.add(what + " " + cfg + ": order-dependent decisions " + Modes.Margins.REASONS.get());
+    }
     rep.check(what + " " + cfg, want, got);
     if (want.ok()) {
       // the Java decoder reads the reference's bytes back exactly

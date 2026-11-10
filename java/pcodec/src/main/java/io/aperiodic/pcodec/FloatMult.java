@@ -128,7 +128,13 @@ final class FloatMult {
       }
     }
     if (len >= required) {
+      if (Modes.Margins.on()) {
+        Modes.IntMult.TIED.get().clear();
+      }
       long[] cand = Modes.IntMult.chooseCandidateBase(Arrays.copyOf(intSample, len));
+      if (Modes.Margins.on() && Modes.IntMult.TIED.get().size() > 1) {
+        Modes.Margins.flag("int mult score tie in float mult's trailing zeros");
+      }
       long intBase = cand == null ? 1 : cand[0];
       long base = f.mul(f.fromLatentNumerical(intBase), f.exp2(ki));
       return Config.fromBase(f, base);
@@ -238,6 +244,7 @@ final class FloatMult {
               int adjBits = 1 + 2 * (lt.bits - lt.leadingZeros(absAdj));
               return (double) interBaseBits - (double) adjBits;
             });
+    Modes.Margins.threshold(Modes.Margins.lo(), Modes.Margins.hi(), Modes.MULT_REQUIRED_BITS_SAVED_PER_NUM, false);
     return saved >= Modes.MULT_REQUIRED_BITS_SAVED_PER_NUM ? saved : Double.NaN;
   }
 
@@ -247,7 +254,11 @@ final class FloatMult {
     };
     Config best = null;
     double bestSaved = 0;
-    for (Config c : candidates) {
+    double bestLo = 0;
+    double bestHi = 0;
+    double[][] intervals = new double[2][];
+    for (int i = 0; i < candidates.length; i++) {
+      Config c = candidates[i];
       if (c == null) {
         continue;
       }
@@ -255,16 +266,26 @@ final class FloatMult {
       if (Double.isNaN(s)) {
         continue;
       }
+      intervals[i] = new double[] {Modes.Margins.lo(), Modes.Margins.hi(), c.base};
       if (best == null || RustMath.totalCmp(s, bestSaved) >= 0) {
         best = c;
         bestSaved = s;
+        bestLo = Modes.Margins.lo();
+        bestHi = Modes.Margins.hi();
       }
     }
     if (best == null) {
       return null;
     }
+    if (intervals[0] != null && intervals[1] != null && intervals[0][2] != intervals[1][2]
+        && Modes.Margins.overlap(intervals[0][0], intervals[0][1], intervals[1][0], intervals[1][1])) {
+      Modes.Margins.flag("float mult candidates"); // could swap order
+    }
     Config c = best;
-    return new Modes.Bid(
+    Modes.Bid bid = new Modes.Bid(
         Mode.floatMult(t.toLatentOrdered(c.base)), bestSaved, xs -> splitLatents(t, f, xs, c));
+    bid.lo = bestLo;
+    bid.hi = bestHi;
+    return bid;
   }
 }

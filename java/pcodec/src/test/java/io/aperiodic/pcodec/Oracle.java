@@ -62,6 +62,22 @@ final class Oracle implements AutoCloseable {
   private final OutputStream out;
   private final DataInputStream in;
 
+  /** the traced reference (oracle-traced/), or null when not built */
+  static Oracle startTraced() {
+    String path = System.getProperty("pcodec.oracle.traced", "oracle-traced/target/release/pcodec-oracle-traced");
+    if (!new File(path).canExecute()) {
+      if (Boolean.getBoolean("pcodec.oracle.required")) {
+        throw new IllegalStateException("the traced oracle is required but missing: " + path);
+      }
+      return null;
+    }
+    try {
+      return new Oracle(path);
+    } catch (IOException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
   /** a new oracle process (its own HashMap seeds), or null when not built */
   static Oracle start() {
     String path = System.getProperty("pcodec.oracle", "oracle/target/release/pcodec-oracle");
