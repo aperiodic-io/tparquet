@@ -131,6 +131,8 @@
             <param>io.aperiodic.pcodec.ApiTest</param>
             <param>io.aperiodic.pcodec.RustMathTest</param>
             <param>io.aperiodic.pcodec.payload.PayloadUnitTest</param>
+            <!-- and the checks of Modes.Margins, the order-independence checker -->
+            <param>io.aperiodic.pcodec.OrderIndependenceTest</param>
           </targetTests>
           <!-- hashCode: Mode's is only required to agree with equals, which any constant does -->
           <excludedMethods>

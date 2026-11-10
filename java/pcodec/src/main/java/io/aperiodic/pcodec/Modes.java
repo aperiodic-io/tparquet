@@ -731,17 +731,18 @@ final class Modes {
     private Dict() {}
 
     /**
-     * {@code dict::compute_bid}. The reference orders the dictionary by descending count with
-     * an unstable sort over a HashMap's (random) order, so its dictionary order among equal
-     * counts is not reproducible; this orders equal counts by first appearance.
-     */
-    /**
      * Verification hook (package-private, tests only): a dictionary order to use instead of
      * first appearance, e.g. the order a reference process chose. Must be a permutation of the
      * order this method would use that keeps counts descending.
      */
     static final ThreadLocal<long[]> FORCED_ORDER = new ThreadLocal<>();
 
+    /**
+     * {@code dict::compute_bid}. The reference orders the dictionary by descending count with
+     * an unstable sort over a HashMap's (random) order, so its dictionary order among equal
+     * counts is not reproducible; this orders equal counts by first appearance, unless
+     * {@link #FORCED_ORDER} gives another.
+     */
     static Bid computeBid(NumberType t, long[] nums) {
       long[] classic = new long[nums.length];
       Map<Long, int[]> countByUnique = new LinkedHashMap<>();

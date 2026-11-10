@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -154,5 +155,35 @@ class ModesTest {
     assertTrue(NumberType.F32.toLatentOrdered(f32(Float.NEGATIVE_INFINITY)) < NumberType.F32.toLatentOrdered(f32(-0.0f)));
     assertTrue(NumberType.F32.toLatentOrdered(f32(-0.0f)) < NumberType.F32.toLatentOrdered(f32(0.0f)));
     assertTrue(NumberType.F32.toLatentOrdered(f32(0.0f)) < NumberType.F32.toLatentOrdered(f32(Float.POSITIVE_INFINITY)));
+  }
+
+  @Test
+  void dictUsesAForcedOrderAndRejectsOneThatIsNotTheReferencesSort() {
+    // counts: 7 x3, 5 x2, 9 x2, 1 x1; the reference may put 5 and 9 either way round
+    long[] nums = {7, 5, 9, 7, 1, 9, 5, 7};
+    NumberType t = NumberType.U32;
+    long l7 = t.toLatentOrdered(7), l5 = t.toLatentOrdered(5), l9 = t.toLatentOrdered(9), l1 = t.toLatentOrdered(1);
+    assertArrayEquals(new long[] {l7, l5, l9, l1}, Modes.Dict.computeBid(t, nums).mode.dict);
+    long[][] bad = {
+      {l7, l9, l5}, // another size
+      {l7, l9, l5, l1, l1},
+      {l5, l7, l9, l1}, // counts not descending
+      {l7, l9, l1, l5},
+      {l7, l9, l9, l1}, // not a permutation
+      {l7, l9, l5, l7 + 1000}, // a value not in the data
+    };
+    try {
+      Modes.Dict.FORCED_ORDER.set(new long[] {l7, l9, l5, l1});
+      Modes.Bid b = Modes.Dict.computeBid(t, nums);
+      assertArrayEquals(new long[] {l7, l9, l5, l1}, b.mode.dict);
+      assertArrayEquals(new long[] {0, 2, 1, 0, 3, 1, 2, 0}, b.split.split(nums).primary);
+      for (long[] f : bad) {
+        Modes.Dict.FORCED_ORDER.set(f);
+        assertThrows(IllegalArgumentException.class, () -> Modes.Dict.computeBid(t, nums), java.util.Arrays.toString(f));
+      }
+    } finally {
+      Modes.Dict.FORCED_ORDER.remove();
+    }
+    assertArrayEquals(new long[] {l7, l5, l9, l1}, Modes.Dict.computeBid(t, nums).mode.dict);
   }
 }

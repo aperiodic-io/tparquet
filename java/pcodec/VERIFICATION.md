@@ -177,7 +177,12 @@ reference), and every one agrees.
   need no oracle against each mutant: the vectors, unit tests and round trips. A mutant that
   survives is a change to the code those suites cannot see. Each round of survivors so far was a
   missing test or dead code, and was fixed: targeted vectors, math special values, unit tests,
-  dead code removed. That took the score from 87% to 91% (2,575 of 2,825 mutants). The build fails below 90%.
+  dead code removed. That took the score from 87% to 91% (2,654 of 2,929 mutants, the
+  checker `Modes.Margins` and its hooks included). The build fails below 90%. The checker is
+  itself tested, without the oracle, in `OrderIndependenceTest`: its intervals hold the
+  quotient of every summation order and are no wider than Higham's bound, its comparisons
+  are exact at their boundaries, and it flags a constructed IntMult score tie between two
+  bases that both win (2^54 - 1 and 2^54 + 1, one f64).
   The remaining survivors fall into three groups:
   - the decision margins of the mode and delta heuristics (a comparison mutated from `<` to `<=`,
     or a constant changed, that no recorded input sits close enough to the threshold to show);
