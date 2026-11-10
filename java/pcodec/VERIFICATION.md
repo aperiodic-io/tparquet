@@ -73,7 +73,7 @@ and a delta encoding (`RoundTripTest.referenceCannotDecodeDictWithDelta`).
 
 ## 2. Proofs (`verification/proofs.py`, Z3)
 
-Each theorem is stated for all inputs of its widths. It is proved when Z3 shows its negation
+93 theorems, all proved, in under a minute. Each theorem is stated for all inputs of its widths. It is proved when Z3 shows its negation
 unsatisfiable. The Java side is transcribed from the named method, the Rust side from pco.
 
 | Theorem | Widths |
@@ -155,8 +155,10 @@ Every case agrees: the same status (ok, error, panic), and when ok the same byte
 
 ## 6. Recorded vectors, conformance files, mutation testing
 
-- `vectors/pco-1.0.4.bin.gz`: 5,561 recorded requests and answers of the reference (compression
-  under random configurations, decoding, decoding corrupted files). `VectorsTest` replays them
+- `vectors/pco-1.0.4.bin.gz`: 6,767 recorded requests and answers of the reference. They cover
+  compression under random configurations, decoding, decoding corrupted files, and targeted
+  cases for every conv1 order, lookback and consecutive delta, mode parameter, level and paging
+  spec. `VectorsTest` replays them
   without Rust. CI re-records them and fails if a byte changes.
 - `testdata/payloads` (`PayloadVectorsTest`): every valid vector decodes, every invalid one is
   refused, and every vector the reference encoder wrote is what the Java encoder writes.

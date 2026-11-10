@@ -1,7 +1,5 @@
 package io.aperiodic.pcodec;
 
-import java.util.Arrays;
-
 /**
  * How a chunk was delta encoded ({@code pco::metadata::DeltaEncoding}), and, through {@link
  * #forLatentVar}, how each latent variable is ({@code LatentVarDeltaEncoding}).
@@ -218,50 +216,24 @@ public final class DeltaEncoding {
     }
   }
 
-  @Override
-  public boolean equals(Object o) {
-    if (!(o instanceof DeltaEncoding)) {
-      return false;
-    }
-    DeltaEncoding d = (DeltaEncoding) o;
-    return kind == d.kind
-        && order == d.order
-        && secondaryUsesDelta == d.secondaryUsesDelta
-        && windowNLog == d.windowNLog
-        && stateNLog == d.stateNLog
-        && quantization == d.quantization
-        && bias == d.bias
-        && Arrays.equals(weights, d.weights);
-  }
-
-  @Override
-  public int hashCode() {
-    return kind.hashCode() * 31 + order;
-  }
-
+  /** Rust's {@code Debug} of the reference's {@code DeltaEncoding} */
   @Override
   public String toString() {
     switch (kind) {
       case NO_OP:
         return "NoOp";
       case CONSECUTIVE:
-        return "Consecutive{order=" + order + ", secondary_uses_delta=" + secondaryUsesDelta + "}";
+        return "Consecutive { order: " + order + ", secondary_uses_delta: " + secondaryUsesDelta + " }";
       case LOOKBACK:
-        return "Lookback{window_n_log="
-            + windowNLog
-            + ", state_n_log="
-            + stateNLog
-            + ", secondary_uses_delta="
-            + secondaryUsesDelta
-            + "}";
+        return "Lookback { config: DeltaLookbackConfig { state_n_log: " + stateNLog + ", window_n_log: "
+            + windowNLog + " }, secondary_uses_delta: " + secondaryUsesDelta + " }";
       default:
-        return "Conv1{quantization="
-            + quantization
-            + ", bias="
-            + bias
-            + ", weights="
-            + Arrays.toString(weights)
-            + "}";
+        StringBuilder w = new StringBuilder();
+        for (int i = 0; i < weights.length; i++) {
+          w.append(i == 0 ? "" : ", ").append(weights[i]);
+        }
+        return "Conv1(DeltaConv1Config { quantization: " + quantization + ", bias: " + bias + ", weights: ["
+            + w + "] })";
     }
   }
 

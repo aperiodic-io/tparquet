@@ -52,6 +52,69 @@ class HistogramTest {
   }
 
   @Test
+  void referenceVectorsOfApplySorted() {
+    Histogram b = Histogram.builderForTest(41, 2);
+    assertEquals(0, b.binIdxForTest(0));
+    assertEquals(0, b.binIdxForTest(10));
+    assertEquals(1, b.binIdxForTest(11));
+    assertEquals(11, b.cCountForTest(0));
+    assertEquals(2, b.binIdxForTest(30));
+    assertEquals(3, b.binIdxForTest(31));
+    assertEquals(3, b.binIdxForTest(40));
+    assertEquals(41, b.cCountForTest(3));
+    assertEquals("(0,0,0)", bins(Histogram.runSorted(new long[][] {{}}, 0, 2)));
+    assertEquals("(1,8,8)(0,0,0)", bins(Histogram.runSorted(new long[][] {{8}}, 1, 0)));
+    assertEquals("(3,1,3)(2,4,5)(2,6,7)(2,8,9)(0,0,0)",
+        bins(Histogram.runSorted(new long[][] {{1, 2, 3, 4, 5, 6, 7, 8, 9}}, 9, 2)));
+    long[] eights = new long[11];
+    Arrays.fill(eights, 8);
+    assertEquals("(11,8,8)(0,0,0)", bins(Histogram.runSorted(new long[][] {eights}, 11, 2)));
+    assertEquals("(3,0,0)(1,1,1)(4,2,2)(0,0,0)", bins(Histogram.runSorted(new long[][] {{0, 0, 0, 1, 2, 2, 2, 2}}, 8, 3)));
+    assertEquals("(2,0,0)(1,1,1)(5,2,2)(0,0,0)", bins(Histogram.runSorted(new long[][] {{0, 0, 1, 2, 2, 2, 2, 2}}, 8, 3)));
+    assertEquals("(2,1,2)(2,3,4)(2,5,6)(2,7,8)(0,0,0)",
+        bins(Histogram.runSorted(new long[][] {{1, 2}, {3, 4, 5}, {6, 7}, {8}}, 16, 3)));
+    assertEquals("(2,1,2)(7,3,3)(1,4,4)(4,5,5)",
+        bins(Histogram.runSorted(new long[][] {{1, 2, 3, 3, 3, 3, 3, 3, 3, 4}, {5, 5, 5, 5}}, 16, 2)));
+    assertEquals("(3,1,2)", bins(Histogram.runSorted(new long[][] {{1, 1, 2}}, 16, 2)));
+  }
+
+  @Test
+  void heapsortFallbackGivesTheSameBins() {
+    // the fallback after too many bad pivots (practically unreachable with the reference's
+    // limit of 1 + log2(n + 1)) gives a valid histogram: exact, tight and disjoint bins (not
+    // the same bins as the quicksort path: the binning of a run depends on the traversal)
+    SplittableRandom r = new SplittableRandom(3);
+    for (int trial = 0; trial < 2000; trial++) {
+      long[] v = new long[r.nextInt(3000)];
+      int spread = 1 + r.nextInt(r.nextBoolean() ? 4 : 1 << 16);
+      for (int i = 0; i < v.length; i++) {
+        v[i] = r.nextInt(8) == 0 ? r.nextInt(spread) * 1000L : r.nextInt(3);
+      }
+      int log = r.nextInt(9);
+      for (int limit = 1; limit <= 3; limit++) {
+        checkInvariants(v, log, Histogram.histogram(v.clone(), Latent.U32, log, limit));
+      }
+    }
+  }
+
+  static void checkInvariants(long[] v, int log, List<Histogram.Bin> h) {
+    long[] sorted = v.clone();
+    Arrays.sort(sorted);
+    int at = 0;
+    long prevUpper = -1;
+    assertTrue(h.size() <= 1 << log);
+    for (Histogram.Bin b : h) {
+      assertTrue(b.count > 0);
+      assertEquals(sorted[at], b.lower, "tight lower");
+      assertEquals(sorted[at + (int) b.count - 1], b.upper, "tight upper");
+      assertTrue(prevUpper == -1 || Long.compareUnsigned(prevUpper, b.lower) < 0, "disjoint");
+      prevUpper = b.upper;
+      at += (int) b.count;
+    }
+    assertEquals(v.length, at, "every latent in a bin");
+  }
+
+  @Test
   void binsAreExactSortedAndTight() {
     SplittableRandom r = new SplittableRandom(1);
     for (int trial = 0; trial < 3000; trial++) {

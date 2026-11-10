@@ -51,10 +51,40 @@ final class Histogram {
   }
 
   static List<Bin> histogram(long[] latents, Latent lt, int nBinsLog) {
+    return histogram(latents, lt, nBinsLog, 1 + (63 - Long.numberOfLeadingZeros(latents.length + 1L)));
+  }
+
+  /** with a given bad pivot limit (the reference's is 1 + log2(n + 1); tests force smaller) */
+  static List<Bin> histogram(long[] latents, Latent lt, int nBinsLog, int badPivotLimit) {
     Histogram h = new Histogram(lt, latents.length, nBinsLog);
-    int badPivotLimit = 1 + (63 - Long.numberOfLeadingZeros(latents.length + 1L));
     h.recurse(latents, 0, latents.length, new Bound(false, 0), new Bound(false, lt.max()), badPivotLimit);
     return h.dst;
+  }
+
+  /**
+   * {@code apply_sorted} over sorted runs, as the reference's tests drive it: the completed bins,
+   * then the incomplete one (count 0 if none).
+   */
+  static List<Bin> runSorted(long[][] runs, long n, int nBinsLog) {
+    Histogram h = new Histogram(Latent.U32, n, nBinsLog);
+    for (long[] run : runs) {
+      h.applySorted(run, 0, run.length);
+    }
+    List<Bin> res = new ArrayList<>(h.dst);
+    res.add(h.hasIncomplete ? new Bin(h.incCount, h.incLower, h.incUpper) : new Bin(0, 0, 0));
+    return res;
+  }
+
+  long binIdxForTest(long cCount) {
+    return binIdx(cCount);
+  }
+
+  long cCountForTest(long binIdx) {
+    return cCount(binIdx);
+  }
+
+  static Histogram builderForTest(long n, int nBinsLog) {
+    return new Histogram(Latent.U32, n, nBinsLog);
   }
 
   private static long sliceMin(long[] v, int from, int to) {

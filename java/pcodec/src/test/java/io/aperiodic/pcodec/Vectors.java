@@ -29,6 +29,9 @@ final class Vectors {
 
   static final String FILE = "pco-1.0.4.bin.gz";
 
+  /** the number of leading requests whose files are also decoded and corrupted */
+  static int base;
+
   static final class Record {
     final byte[] request;
     final int status;
@@ -93,6 +96,81 @@ final class Vectors {
         res.add(Oracle.compressRequest(c.type, cfg, c.nums));
       }
     }
+    base = res.size();
+    // targeted (compression only): each delta encoding, mode parameter, level and paging spec on data it suits
+    for (NumberType t : new NumberType[] {NumberType.U8, NumberType.I16, NumberType.U16, NumberType.I32, NumberType.U32}) {
+      for (String shape : new String[] {"trend", "quadratic", "walk"}) {
+        for (int n : new int[] {40, 515, 1100}) {
+          long[] nums = Corpus.generate(t, shape, n, 3);
+          for (long order : new long[] {1, 2, 3, 5, 6, 8, 16}) {
+            Oracle.Cfg c = new Oracle.Cfg();
+            c.delta = 4;
+            c.deltaOrder = order;
+            c.enable8Bit = true;
+            res.add(Oracle.compressRequest(t, c, nums));
+          }
+        }
+      }
+    }
+    for (NumberType t : new NumberType[] {NumberType.I64, NumberType.F64, NumberType.U32, NumberType.F32}) {
+      for (String shape : new String[] {"periodic", "dictish", "spiky", "steps"}) {
+        for (int n : new int[] {20, 300, 1500}) {
+          long[] nums = Corpus.generate(t, shape, n, 4);
+          Oracle.Cfg lb = new Oracle.Cfg();
+          lb.delta = 3;
+          res.add(Oracle.compressRequest(t, lb, nums));
+          res.add(Oracle.compressRequest(t, new Oracle.Cfg(), nums));
+          for (long order = 1; order <= 7; order++) {
+            Oracle.Cfg c = new Oracle.Cfg();
+            c.delta = 2;
+            c.deltaOrder = order;
+            res.add(Oracle.compressRequest(t, c, Corpus.generate(t, "quadratic", n, 4)));
+          }
+        }
+      }
+    }
+    for (NumberType t : new NumberType[] {NumberType.F64, NumberType.F32, NumberType.F16}) {
+      for (String shape : new String[] {"floatMult", "quant", "decimal", "prices", "multNoise"}) {
+        for (int n : new int[] {30, 2000}) {
+          long[] nums = Corpus.generate(t, shape, n, 5);
+          res.add(Oracle.compressRequest(t, new Oracle.Cfg(), nums));
+          for (double b : new double[] {0.1, 0.01, 0.25, 1.0 / 3}) {
+            Oracle.Cfg c = new Oracle.Cfg();
+            c.mode = 2;
+            c.modeF64 = b;
+            res.add(Oracle.compressRequest(t, c, nums));
+          }
+          for (int k : new int[] {1, 4, 10, 20}) {
+            Oracle.Cfg c = new Oracle.Cfg();
+            c.mode = 3;
+            c.modeK = k;
+            res.add(Oracle.compressRequest(t, c, nums));
+          }
+        }
+      }
+    }
+    for (NumberType t : new NumberType[] {NumberType.I64, NumberType.U16, NumberType.I32}) {
+      for (String shape : new String[] {"mult", "multNoise", "timestamps"}) {
+        long[] nums = Corpus.generate(t, shape, 1300, 6);
+        res.add(Oracle.compressRequest(t, new Oracle.Cfg(), nums));
+        for (long b : new long[] {2, 3, 7, 1000}) {
+          Oracle.Cfg c = new Oracle.Cfg();
+          c.mode = 4;
+          c.modeBase = b;
+          res.add(Oracle.compressRequest(t, c, nums));
+        }
+        for (int level = 0; level <= 12; level++) {
+          Oracle.Cfg c = new Oracle.Cfg();
+          c.level = level;
+          res.add(Oracle.compressRequest(t, c, nums));
+        }
+        for (long up : new long[] {1, 100, 1000}) {
+          Oracle.Cfg c = new Oracle.Cfg();
+          c.pagingValues = new long[] {up};
+          res.add(Oracle.compressRequest(t, c, java.util.Arrays.copyOf(nums, 1200)));
+        }
+      }
+    }
     return res;
   }
 
@@ -101,9 +179,12 @@ final class Vectors {
     ByteBuffer b = ByteBuffer.wrap(request).order(ByteOrder.LITTLE_ENDIAN);
     int op = b.get();
     NumberType t = NumberType.fromTypeByte(b.get());
-    if (op == 1) {
+    if (op == 1 || op == 3) {
       Oracle.Cfg cfg = Oracle.Cfg.parse(b);
       long[] nums = Oracle.fromRaw(t, request, b.position(), b.remaining() / (t.bits() / 8));
+      if (op == 3) {
+        return Parity.java(() -> Pco.chunkMeta(t, nums, cfg.toConfig()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      }
       return Parity.java(() -> Pco.compress(t, nums, cfg.toConfig()));
     }
     byte[] file = new byte[b.remaining()];
@@ -126,11 +207,20 @@ final class Vectors {
           }
         };
         DataOutputStream out = new DataOutputStream(gz)) {
-      for (byte[] req : requests()) {
+      List<byte[]> reqs = requests();
+      for (int i = 0; i < reqs.size(); i++) {
+        byte[] req = reqs.get(i);
         Oracle.Answer a = o.call(req);
         write(out, req, a);
         n++;
-        if (a.ok()) {
+        if (i < base && i % 4 == 0) {
+          // the chunk metadata, as the reference's Debug prints it
+          byte[] meta = req.clone();
+          meta[0] = 3;
+          write(out, meta, o.call(meta));
+          n++;
+        }
+        if (a.ok() && i < base) {
           // the decoder on the file, and on a corrupted copy
           byte[] dec = Oracle.decompressRequest(NumberType.fromTypeByte(req[1]), a.body);
           write(out, dec, o.call(dec));
@@ -147,6 +237,8 @@ final class Vectors {
       }
     }
     System.out.println("wrote " + n + " records to " + p);
+    MathParityTest.o = o;
+    Files.write(p.resolveSibling("math.txt"), MathVectorsTest.record());
   }
 
   private static void write(DataOutputStream out, byte[] req, Oracle.Answer a) throws IOException {

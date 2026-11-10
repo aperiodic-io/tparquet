@@ -169,19 +169,30 @@ public final class Mode {
     return kind.hashCode() * 31 + Long.hashCode(base) + k;
   }
 
-  @Override
-  public String toString() {
+  /** Rust's {@code Debug} of the reference's {@code Mode}, for a number latent of the given type */
+  String debug(Latent numberLatent) {
     switch (kind) {
       case CLASSIC:
         return "Classic";
       case INT_MULT:
-        return "IntMult(" + Long.toUnsignedString(base) + ")";
+        return "IntMult(" + ChunkMeta.dynLatent(numberLatent, base) + ")";
       case FLOAT_MULT:
-        return "FloatMult(" + Long.toUnsignedString(base) + ")";
+        return "FloatMult(" + ChunkMeta.dynLatent(numberLatent, base) + ")";
       case FLOAT_QUANT:
         return "FloatQuant(" + k + ")";
       default:
-        return "Dict(" + dict.length + ")";
+        {
+          StringBuilder sb = new StringBuilder();
+          for (int i = 0; i < dict.length; i++) {
+            sb.append(i == 0 ? "" : ", ").append(Long.toUnsignedString(dict[i]));
+          }
+          return "Dict(" + numberLatent.toString().toUpperCase(java.util.Locale.ROOT) + "([" + sb + "]))";
+        }
     }
+  }
+
+  @Override
+  public String toString() {
+    return debug(Latent.U64);
   }
 }

@@ -1,7 +1,5 @@
 package io.aperiodic.pcodec;
 
-import java.util.Arrays;
-
 /** The metadata of a chunk ({@code pco::metadata::ChunkMeta}). */
 public final class ChunkMeta {
   static final int BITS_ANS_SIZE_LOG = 4;
@@ -27,21 +25,8 @@ public final class ChunkMeta {
     }
 
     @Override
-    public boolean equals(Object o) {
-      return o instanceof Bin
-          && ((Bin) o).weight == weight
-          && ((Bin) o).lower == lower
-          && ((Bin) o).offsetBits == offsetBits;
-    }
-
-    @Override
-    public int hashCode() {
-      return weight * 31 + Long.hashCode(lower) * 7 + offsetBits;
-    }
-
-    @Override
     public String toString() {
-      return "Bin{weight=" + weight + ", lower=" + Long.toUnsignedString(lower) + ", offset_bits=" + offsetBits + "}";
+      return "Bin { weight: " + weight + ", lower: " + Long.toUnsignedString(lower) + ", offset_bits: " + offsetBits + " }";
     }
   }
 
@@ -119,21 +104,13 @@ public final class ChunkMeta {
     }
 
     @Override
-    public boolean equals(Object o) {
-      return o instanceof LatentVar
-          && ((LatentVar) o).ansSizeLog == ansSizeLog
-          && ((LatentVar) o).latent == latent
-          && Arrays.equals(((LatentVar) o).bins, bins);
-    }
-
-    @Override
-    public int hashCode() {
-      return Arrays.hashCode(bins) + ansSizeLog;
-    }
-
-    @Override
     public String toString() {
-      return "LatentVar{ans_size_log=" + ansSizeLog + ", " + latent + ", bins=" + Arrays.toString(bins) + "}";
+      StringBuilder sb = new StringBuilder();
+      for (int i = 0; i < bins.length; i++) {
+        sb.append(i == 0 ? "" : ", ").append(bins[i]);
+      }
+      return "ChunkLatentVarMeta { ans_size_log: " + ansSizeLog + ", bins: "
+          + latent.toString().toUpperCase(java.util.Locale.ROOT) + "([" + sb + "]) }";
     }
   }
 
@@ -264,14 +241,19 @@ public final class ChunkMeta {
     return create(mode, delta, vars, numberLatent);
   }
 
+  static String dynLatent(Latent lt, long x) {
+    return lt.toString().toUpperCase(java.util.Locale.ROOT) + "(" + Long.toUnsignedString(x) + ")";
+  }
+
+  private static String option(LatentVar v) {
+    return v == null ? "None" : "Some(" + v + ")";
+  }
+
+  /** Rust's {@code Debug} of the reference's {@code ChunkMeta} */
   @Override
   public String toString() {
-    return "ChunkMeta{mode="
-        + mode
-        + ", delta="
-        + deltaEncoding
-        + ", vars="
-        + Arrays.toString(perLatentVar)
-        + "}";
+    return "ChunkMeta { mode: " + mode.debug(numberLatent) + ", delta_encoding: " + deltaEncoding
+        + ", per_latent_var: PerLatentVar { delta: " + option(perLatentVar[0]) + ", primary: "
+        + perLatentVar[1] + ", secondary: " + option(perLatentVar[2]) + " }, _private: () }";
   }
 }

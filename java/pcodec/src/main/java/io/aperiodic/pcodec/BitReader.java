@@ -6,20 +6,42 @@ package io.aperiodic.pcodec;
  * past the end, at the points where the reference checks.
  */
 final class BitReader {
+  private static final java.lang.invoke.VarHandle LONG_LE =
+      java.lang.invoke.MethodHandles.byteArrayViewVarHandle(long[].class, java.nio.ByteOrder.LITTLE_ENDIAN);
+
+  /** bytes after {@code end} that are zero in {@code src}, so that word reads need no checks */
+  static final int PADDING = 16;
+
   final byte[] src;
+  /** whether src holds at least PADDING zero bytes after end */
+  private final boolean padded;
   private final int start;
   private final int end;
   /** bit position relative to {@code start} */
   long bitIdx;
 
   BitReader(byte[] src, int start, int end) {
+    this(src, start, end, false);
+  }
+
+  /** {@code padded}: src[end, end + PADDING) exists and is zero */
+  BitReader(byte[] src, int start, int end, boolean padded) {
     this.src = src;
     this.start = start;
     this.end = end;
+    this.padded = padded;
+  }
+
+  /** a copy of src[off, off + len) followed by PADDING zero bytes */
+  static byte[] padCopy(byte[] src, int off, int len) {
+    return java.util.Arrays.copyOfRange(src, off, off + len + PADDING);
   }
 
   long u64At(long byteIdx) {
     long abs = start + byteIdx;
+    if (padded && abs + 8 <= end + PADDING) {
+      return (long) LONG_LE.get(src, (int) abs);
+    }
     if (abs + 8 <= end) {
       long r = 0;
       int i = (int) abs;

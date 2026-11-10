@@ -125,7 +125,7 @@
             <param>io.aperiodic.pcodec.ModesTest</param>
             <param>io.aperiodic.pcodec.DeltaTest</param>
             <param>io.aperiodic.pcodec.RoundTripTest</param>
-            <param>io.aperiodic.pcodec.UnitTest</param>
+            <param>io.aperiodic.pcodec.MathVectorsTest</param>
           </targetTests>
           <timestampedReports>false</timestampedReports>
           <outputFormats>

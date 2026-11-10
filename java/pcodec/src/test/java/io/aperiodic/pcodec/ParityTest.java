@@ -78,6 +78,30 @@ class ParityTest {
   }
 
   @Test
+  void chunkMetadataEqualsTheReferences() {
+    // the chosen mode, delta encoding, bins and ANS table sizes, compared as the reference's
+    // Debug output prints them
+    assumeTrue(o != null, "oracle not built");
+    Report rep = new Report();
+    SplittableRandom r = new SplittableRandom(11);
+    for (Corpus.Case c : Corpus.cases(ALL, new int[] {1, 12, 300, 3000}, scale)) {
+      Oracle.Cfg[] modes = modeSpecs(c.type, r);
+      Oracle.Cfg cfg = r.nextBoolean() ? new Oracle.Cfg() : modes[r.nextInt(modes.length)];
+      Oracle.Cfg d = deltaSpecs()[r.nextInt(deltaSpecs().length)];
+      cfg.delta = r.nextBoolean() ? 0 : d.delta;
+      cfg.deltaOrder = d.deltaOrder;
+      cfg.enable8Bit = true;
+      if (cfg.mode == 5 && !dictReproducible(c.type, c.nums)) {
+        continue;
+      }
+      Oracle.Cfg f = cfg;
+      rep.check(c + " " + cfg, o.meta(c.type, cfg, c.nums),
+          Parity.java(() -> Pco.chunkMeta(c.type, c.nums, f.toConfig()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+    rep.done();
+  }
+
+  @Test
   void everyCompressionLevel() {
     assumeTrue(o != null, "oracle not built");
     Report rep = new Report();

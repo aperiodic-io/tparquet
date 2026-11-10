@@ -185,6 +185,11 @@ public final class Pco {
    */
   public static int decompress(
       byte[] src, int offset, int length, NumberType type, long maxNumbers, BatchSink sink) {
+    return offset + decompressPadded(BitReader.padCopy(src, offset, length), length, type, maxNumbers, sink);
+  }
+
+  private static int decompressPadded(byte[] src, int length, NumberType type, long maxNumbers, BatchSink sink) {
+    int offset = 0;
     Header h = readHeader(src, offset, length);
     int end = offset + length;
     int pos = h.bodyStart;
@@ -209,7 +214,7 @@ public final class Pco {
       }
       int n = pre.readInt(BITS_TO_ENCODE_N_ENTRIES) + 1;
       pre.checkInBounds();
-      BitReader r = new BitReader(src, pre.bytePos(), end);
+      BitReader r = new BitReader(src, pre.bytePos(), end, true);
       ChunkMeta meta = ChunkMeta.readFrom(r, h.formatMajor, type.latent);
       ChunkDecompressor cd = new ChunkDecompressor(type, meta, n);
       if (maxNumbers >= 0 && total + n > maxNumbers) {

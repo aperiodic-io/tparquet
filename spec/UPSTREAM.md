@@ -142,8 +142,8 @@ All values round-trip bit for bit. Where it is weaker:
 - *Data it does not help*: strings and booleans; order books stored as lists come out at
   1.07× of ZSTD(9).
 - *Implementation*: every number above comes from the Rust implementation. A pure Java
-  implementation exists ([`java/pcodec`](../java/pcodec), item 1) but its speeds are not yet
-  measured.
+  implementation exists ([`java/pcodec`](../java/pcodec), item 1). Its preliminary speeds are
+  a third to a half of the Rust encoder's and a fifth to two fifths of its decoder's.
 
 This is not yet the evidence the community asked for. In 2025 the objection was that the
 benchmarks were "rather niche" and that new encodings "should be gated with a large enough
@@ -214,7 +214,8 @@ notes of [19 March](https://www.mail-archive.com/dev@parquet.apache.org/msg26303
    Rust reference's byte for byte ([`VERIFICATION.md`](../java/pcodec/VERIFICATION.md)). It
    answers the toolchain and JNI objections. It is a port of the reference's source, not
    written from the specification alone, so it does not show the spec complete (item 2 still
-   stands). Its speeds are not yet measured, and the parquet-java fork does not use it yet.
+   stands). Its speeds are only measured roughly (its README), and the parquet-java fork does
+   not use it yet.
 2. **A complete, pinned pcodec format document.** Close what pcodec issue #149 left open (an
    overview, definitions of the tANS terms and latent variables, the "data page" terminology)
    upstream in pcodec, and cite one version of the format with a compatibility promise.

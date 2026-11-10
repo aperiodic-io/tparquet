@@ -43,6 +43,23 @@ Zstandard implementation and the upstream profile of the codec drops the mode. W
 encoder writes RAW where the reference would write ZSTD (a valid payload), and decoding a ZSTD
 payload fails.
 
+## Speed
+
+The port follows the reference's algorithms and was written for parity, not speed. Preliminary
+figures, MB/s of values, 2^20 numbers, default level, from `Bench` (test sources) on a shared
+4-core machine, with the reference timed in the same run:
+
+| Data | Java encode | Rust encode | Java decode | Rust decode |
+|---|---:|---:|---:|---:|
+| f64 prices | 65 | 185 | 217 | 1,328 |
+| f64 random walk | 72 | 220 | 437 | 1,454 |
+| i64 timestamps | 132 | 362 | 459 | 2,356 |
+| i32 random walk | 38 | 143 | 308 | 1,765 |
+| i64 uniform | 141 | 260 | 769 | 1,860 |
+
+Encoding runs at a third to a half of the reference's speed, decoding at a fifth to two fifths.
+Measuring this properly (JMH, an idle machine) belongs to the proposal's Evaluation.
+
 ## Layout
 
 | Path | What |
