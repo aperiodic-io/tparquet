@@ -1,0 +1,21 @@
+# The Rust reference the pure Java pcodec is checked against: pco 1.0.4 (the version tparquet
+# pins) and tparquet-core, behind a binary protocol on stdin/stdout (see src/main.rs). Its own
+# workspace, so that it adds nothing to the root workspace's lock file.
+[workspace]
+
+[package]
+name = "pcodec-oracle"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+pco = "=1.0.4"
+half = "2"
+tparquet-core = { path = "../../../rust/core" }
+
+[profile.release]
+# the reference as tparquet ships it: release, overflow wraps
+debug = false
