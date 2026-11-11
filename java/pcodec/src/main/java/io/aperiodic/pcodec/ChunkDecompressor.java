@@ -189,9 +189,14 @@ final class ChunkDecompressor {
     return nRemaining == 0;
   }
 
+  /** the size of the next batch */
+  int nextBatchN() {
+    return Math.min(FULL_BATCH_N, nRemaining);
+  }
+
   /** decodes the next batch (up to 256 numbers) into {@code dst[at..]}, returning its size */
   int readBatch(BitReader r, long[] dst, int at) {
-    int batchN = Math.min(FULL_BATCH_N, nRemaining);
+    int batchN = nextBatchN();
     LatentDecompressor d = vars[0];
     if (d != null) {
       int limit = Math.min(Math.max(nRemaining - nLatentsPerDeltaState(), 0), batchN);

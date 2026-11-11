@@ -39,6 +39,11 @@ public final class Pco {
       long[] chunk = Arrays.copyOfRange(nums, start, start + pageN);
       ChunkCompressor cc =
           ChunkCompressor.create(type, chunk, config.withPagingSpec(PagingSpec.exact(pageN)));
+      // size the buffer to the chunk's estimate (its meta's bound and the page's size hint, the
+      // entropy of its bins, plus a little for ANS falling short of it) instead of doubling up
+      // to it from 256 bytes
+      long hint = cc.pageSizeHintInner(0);
+      w.reserve(2 + cc.meta.maxSize() + hint + hint / 32 + 64);
       w.writeAlignedBytes(new byte[] {(byte) type.typeByte});
       w.writeUint(pageN - 1, BITS_TO_ENCODE_N_ENTRIES);
       cc.writeMeta(w);
@@ -131,7 +136,10 @@ public final class Pco {
 
   public static Header readHeader(byte[] src, int offset, int length) {
     java.util.Objects.checkFromIndexSize(offset, length, src.length);
-    BitReader r = new BitReader(src, offset, offset + length);
+    return readHeader(new BitReader(src, offset, offset + length));
+  }
+
+  private static Header readHeader(BitReader r) {
     byte[] magic = r.readAlignedBytes(4);
     r.checkInBounds();
     if (!Arrays.equals(magic, MAGIC_HEADER)) {
@@ -204,13 +212,52 @@ public final class Pco {
    */
   public static int decompress(
       byte[] src, int offset, int length, NumberType type, long maxNumbers, BatchSink sink) {
-    Header h = readHeader(src, offset, length);
-    int end = offset + length;
+    long[] batch = new long[ChunkDecompressor.FULL_BATCH_N];
+    return decompress(
+        src,
+        offset,
+        length,
+        type,
+        maxNumbers,
+        new Dst() {
+          @Override
+          public long[] array(int len) {
+            return batch;
+          }
+
+          @Override
+          public int at() {
+            return 0;
+          }
+
+          @Override
+          public void filled(int len) {
+            sink.accept(batch, len);
+          }
+        });
+  }
+
+  /** where the decoding loop puts each batch */
+  private interface Dst {
+    /** the array to decode the next {@code len} numbers into, at {@link #at} */
+    long[] array(int len);
+
+    int at();
+
+    /** the numbers are in the array */
+    void filled(int len);
+  }
+
+  private static int decompress(
+      byte[] src, int offset, int length, NumberType type, long maxNumbers, Dst dst) {
+    java.util.Objects.checkFromIndexSize(offset, length, src.length);
+    // one word array for the whole file, shared by its readers
+    BitReader file = new BitReader(src, offset, offset + length);
+    Header h = readHeader(file);
     int pos = h.bodyStart;
     long total = 0;
-    long[] batch = new long[ChunkDecompressor.FULL_BATCH_N];
     while (true) {
-      BitReader pre = new BitReader(src, pos, end);
+      BitReader pre = file.at(pos);
       int b = pre.readAlignedBytes(1)[0] & 0xff;
       pre.checkInBounds();
       if (b == MAGIC_TERMINATION_BYTE) {
@@ -228,7 +275,7 @@ public final class Pco {
       }
       int n = pre.readInt(BITS_TO_ENCODE_N_ENTRIES) + 1;
       pre.checkInBounds();
-      BitReader r = new BitReader(src, pre.bytePos(), end);
+      BitReader r = file.at(pre.bytePos());
       ChunkMeta meta = ChunkMeta.readFrom(r, h.formatMajor, type.latent);
       ChunkDecompressor cd = new ChunkDecompressor(type, meta, n);
       if (maxNumbers >= 0 && total + n > maxNumbers) {
@@ -236,8 +283,9 @@ public final class Pco {
       }
       cd.readPageMeta(r);
       while (!cd.finished()) {
-        int len = cd.readBatch(r, batch, 0);
-        sink.accept(batch, len);
+        long[] a = dst.array(cd.nextBatchN());
+        int len = cd.readBatch(r, a, dst.at());
+        dst.filled(len);
       }
       total += n;
       pos = r.bytePos();
@@ -273,23 +321,48 @@ public final class Pco {
    */
   public static Decoded decompress(byte[] src, NumberType type, long maxNumbers) {
     long max = Math.min(maxNumbers, MAX_ARRAY);
-    long[][] out = {new long[1024]};
-    int[] count = new int[1];
-    int end =
-        decompress(
-            src,
-            0,
-            src.length,
-            type,
-            max,
-            (b, len) -> {
-              if (count[0] + len > out[0].length) {
-                out[0] = Arrays.copyOf(out[0], (int) Math.min(max, Math.max(2L * out[0].length, count[0] + len)));
-              }
-              System.arraycopy(b, 0, out[0], count[0], len);
-              count[0] += len;
-            });
-    return new Decoded(type, count[0] == out[0].length ? out[0] : Arrays.copyOf(out[0], count[0]), end);
+    Growing out = new Growing(max);
+    int end = decompress(src, 0, src.length, type, max, out);
+    long[] nums = out.out;
+    return new Decoded(type, out.count == nums.length ? nums : Arrays.copyOf(nums, out.count), end);
+  }
+
+  /**
+   * The whole output, batches decoded straight into it; a batch that does not fit goes through
+   * a scratch batch and grows the array after, as a sink would.
+   */
+  private static final class Growing implements Dst {
+    private final long max;
+    private final long[] batch = new long[ChunkDecompressor.FULL_BATCH_N];
+    long[] out = new long[1024];
+    int count;
+    private boolean direct;
+
+    Growing(long max) {
+      this.max = max;
+    }
+
+    @Override
+    public long[] array(int len) {
+      direct = count + len <= out.length;
+      return direct ? out : batch;
+    }
+
+    @Override
+    public int at() {
+      return direct ? count : 0;
+    }
+
+    @Override
+    public void filled(int len) {
+      if (!direct) {
+        if (count + len > out.length) {
+          out = Arrays.copyOf(out, (int) Math.min(max, Math.max(2L * out.length, count + len)));
+        }
+        System.arraycopy(batch, 0, out, count, len);
+      }
+      count += len;
+    }
   }
 
   /** The number type of the first chunk (or the uniform type), or null for a file without chunks. */

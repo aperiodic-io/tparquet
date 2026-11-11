@@ -91,16 +91,19 @@ final class ChunkCompressor {
         int rs = b * FULL_BATCH_N;
         int re = Math.min((b + 1) * FULL_BATCH_N, pageN);
         int batchN = re - rs;
-        // binary search
-        java.util.Arrays.fill(searchIdxs, 0);
-        for (int depth = 0; depth < searchSizeLog; depth++) {
-          int bisection = 1 << (searchSizeLog - 1 - depth);
-          for (int i = 0; i < batchN; i++) {
-            int cand = searchIdxs[i] + bisection;
-            if (!Latent.lt(latents[start + rs + i], searchLowers[cand])) {
-              searchIdxs[i] += bisection;
+        // binary search, one element at a time through all depths (the reference goes depth by
+        // depth over the batch; each element's path is the same either way), so the index and
+        // the latent stay in registers. Indices from batchN on are left as they are: only the
+        // batch's are read.
+        for (int i = 0; i < batchN; i++) {
+          long x = latents[start + rs + i];
+          int idx = 0;
+          for (int bisection = (1 << searchSizeLog) >>> 1; bisection > 0; bisection >>>= 1) {
+            if (!Latent.lt(x, searchLowers[idx + bisection])) {
+              idx += bisection;
             }
           }
+          searchIdxs[i] = idx;
         }
         if (infos.length < (1 << searchSizeLog)) {
           for (int i = 0; i < FULL_BATCH_N; i++) {
@@ -163,14 +166,7 @@ final class ChunkCompressor {
         return;
       }
       int end = Math.min(batchStart + FULL_BATCH_N, d.offsets.length);
-      if (needsAns) {
-        for (int i = batchStart; i < end; i++) {
-          w.writeUint(d.ansVals[i] & 0xffffffffL, d.ansBits[i]);
-        }
-      }
-      for (int i = batchStart; i < end; i++) {
-        w.writeUint(d.offsets[i], d.offsetBits[i]);
-      }
+      w.writeBatch(d.ansVals, d.ansBits, d.offsets, d.offsetBits, batchStart, end, needsAns);
     }
   }
 

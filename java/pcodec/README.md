@@ -50,20 +50,10 @@ payload fails.
 
 ## Speed
 
-The port follows the reference's algorithms and was written for parity, not speed. Preliminary
-figures, MB/s of values, 2^20 numbers, default level, from `Bench` (test sources) on a shared
-4-core machine, with the reference timed in the same run:
-
-| Data | Java encode | Rust encode | Java decode | Rust decode |
-|---|---:|---:|---:|---:|
-| f64 prices | 65 | 185 | 217 | 1,328 |
-| f64 random walk | 72 | 220 | 437 | 1,454 |
-| i64 timestamps | 132 | 362 | 459 | 2,356 |
-| i32 random walk | 38 | 143 | 308 | 1,765 |
-| i64 uniform | 141 | 260 | 769 | 1,860 |
-
-Encoding runs at a third to a half of the reference's speed, decoding at a fifth to two fifths.
-Measuring this properly (JMH, an idle machine) belongs to the proposal's Evaluation.
+`make bench` times Java against the reference on the same numbers (BENCHMARK.md): 14 cases
+covering every mode and delta encoding, 2^20 numbers each. Java encodes at 0.60 of the
+reference's speed and decodes at 0.29 (geometric means), after ten optimizations chosen by
+measuring 40 proofs of concept (`bench/`); Dict-mode encoding is faster than the reference's.
 
 ## Layout
 

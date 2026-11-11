@@ -2,7 +2,6 @@ package io.aperiodic.pcodec;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -254,14 +253,15 @@ final class Modes {
    * first appearance (see VERIFICATION.md on summation order).
    */
   static double estBitsSavedPerNum(long[] sample, PrimaryFn primaryFn, double bitsSavedEach) {
-    Map<Long, double[]> countsAndSavings = new LinkedHashMap<>();
+    LongIndexMap primaries = new LongIndexMap(sample.length);
+    int[] counts = new int[sample.length];
+    double[] savings = new double[sample.length];
     for (long x : sample) {
-      long p = primaryFn.primary(x);
-      double[] e = countsAndSavings.computeIfAbsent(p, key -> new double[] {0, 0.0});
-      e[0] += 1;
-      e[1] += bitsSavedEach;
+      int e = primaries.add(primaryFn.primary(x));
+      counts[e] += 1;
+      savings[e] += bitsSavedEach;
     }
-    return sumInfrequent(sample.length, countsAndSavings);
+    return sumInfrequent(sample.length, primaries.size(), counts, savings);
   }
 
   interface PrimaryAndSavings {
@@ -270,27 +270,30 @@ final class Modes {
   }
 
   static double estBitsSavedPerNum(long[] sample, PrimaryAndSavings f) {
-    Map<Long, double[]> countsAndSavings = new LinkedHashMap<>();
+    LongIndexMap primaries = new LongIndexMap(sample.length);
+    int[] counts = new int[sample.length];
+    double[] savings = new double[sample.length];
     long[] out = new long[1];
     for (long x : sample) {
       double saved = f.apply(x, out);
-      double[] e = countsAndSavings.computeIfAbsent(out[0], key -> new double[] {0, 0.0});
-      e[0] += 1;
-      e[1] += saved;
+      int e = primaries.add(out[0]);
+      counts[e] += 1;
+      savings[e] += saved;
     }
-    return sumInfrequent(sample.length, countsAndSavings);
+    return sumInfrequent(sample.length, primaries.size(), counts, savings);
   }
 
-  private static double sumInfrequent(int sampleLen, Map<Long, double[]> countsAndSavings) {
+  /** sums the savings of the primaries seen at most the cutoff times, in order of first appearance */
+  private static double sumInfrequent(int sampleLen, int nPrimaries, int[] counts, double[] savings) {
     long cutoff = Math.max(1, RustMath.f64ToUnsigned(sampleLen / CLASSIC_MEMORIZABLE_BINS, 64));
     double s = -0.0;
-    double[] terms = Margins.on() ? new double[countsAndSavings.size()] : null;
+    double[] terms = Margins.on() ? new double[nPrimaries] : null;
     int nTerms = 0;
-    for (double[] e : countsAndSavings.values()) {
-      if ((long) e[0] <= cutoff) {
-        s += e[1];
+    for (int e = 0; e < nPrimaries; e++) {
+      if (counts[e] <= cutoff) {
+        s += savings[e];
         if (terms != null) {
-          terms[nTerms++] = e[1];
+          terms[nTerms++] = savings[e];
         }
       }
     }
@@ -744,46 +747,56 @@ final class Modes {
      * {@link #FORCED_ORDER} gives another.
      */
     static Bid computeBid(NumberType t, long[] nums) {
-      long[] classic = new long[nums.length];
-      Map<Long, int[]> countByUnique = new LinkedHashMap<>();
+      LongIndexMap uniques = new LongIndexMap(16);
+      int[] uniqueOf = new int[nums.length];
+      int[] counts = new int[16];
       for (int i = 0; i < nums.length; i++) {
-        classic[i] = t.toLatentOrdered(nums[i]);
-        countByUnique.computeIfAbsent(classic[i], key -> new int[1])[0]++;
+        int u = uniques.add(t.toLatentOrdered(nums[i]));
+        if (u == counts.length) {
+          counts = Arrays.copyOf(counts, counts.length * 2);
+        }
+        counts[u]++;
+        uniqueOf[i] = u;
       }
-      List<Map.Entry<Long, int[]>> entries = new ArrayList<>(countByUnique.entrySet());
-      entries.sort((a, b) -> Integer.compareUnsigned(b.getValue()[0], a.getValue()[0]));
-      long[] dict = new long[entries.size()];
+      int nUniques = uniques.size();
+      // counts descending, equal counts in order of first appearance (a stable sort's order)
+      long[] order = new long[nUniques];
+      for (int u = 0; u < nUniques; u++) {
+        order[u] = ((long) (Integer.MAX_VALUE - counts[u]) << 32) | u;
+      }
+      Arrays.sort(order);
+      long[] dict = new long[nUniques];
+      int[] rank = new int[nUniques];
       long[] forced = FORCED_ORDER.get();
       if (forced != null) {
-        checkForcedOrder(forced, entries);
+        checkForcedOrder(forced, uniques, counts, order);
       }
-      Map<Long, Integer> idx = new HashMap<>();
-      for (int i = 0; i < dict.length; i++) {
-        dict[i] = forced != null ? forced[i] : entries.get(i).getKey();
-        idx.put(dict[i], i);
+      for (int i = 0; i < nUniques; i++) {
+        int u = forced != null ? uniques.get(forced[i]) : (int) order[i];
+        dict[i] = uniques.key(u);
+        rank[u] = i;
       }
       long[] indices = new long[nums.length];
       for (int i = 0; i < nums.length; i++) {
-        indices[i] = idx.get(classic[i]) & 0xffffffffL;
+        indices[i] = rank[uniqueOf[i]] & 0xffffffffL;
       }
       Split split = new Split(indices, null);
       return new Bid(Mode.dict(dict), 0.0, xs -> split);
     }
 
     /** a forced order is the reference's sort: the same values, counts descending */
-    private static void checkForcedOrder(long[] forced, List<Map.Entry<Long, int[]>> entries) {
-      Map<Long, Integer> counts = new HashMap<>();
-      for (Map.Entry<Long, int[]> e : entries) {
-        counts.put(e.getKey(), e.getValue()[0]);
-      }
-      if (forced.length != entries.size()) {
+    private static void checkForcedOrder(
+        long[] forced, LongIndexMap uniques, int[] counts, long[] order) {
+      if (forced.length != order.length) {
         throw new IllegalArgumentException("forced dictionary has another size");
       }
+      boolean[] used = new boolean[order.length];
       for (int i = 0; i < forced.length; i++) {
-        Integer c = counts.remove(forced[i]);
-        if (c == null || c != entries.get(i).getValue()[0]) {
+        int u = uniques.get(forced[i]);
+        if (u < 0 || used[u] || counts[u] != counts[(int) order[i]]) {
           throw new IllegalArgumentException("forced dictionary is not a count-descending permutation");
         }
+        used[u] = true;
       }
     }
   }

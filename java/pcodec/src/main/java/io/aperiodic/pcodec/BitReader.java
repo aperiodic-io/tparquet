@@ -12,28 +12,51 @@ final class BitReader {
   final byte[] src;
   private final int start;
   private final int end;
+  /**
+   * {@code src[base, end)} as little-endian words, zeros past the end, with one more zero word so
+   * a value can always read the word after its first
+   */
+  private final long[] words;
+  /** bit offset of {@code start} in {@link #words} */
+  private final long wordBit;
   /** bit position relative to {@code start} */
   long bitIdx;
 
   /** Reads {@code src[start, end)}; the caller has checked that range lies in {@code src}. */
   BitReader(byte[] src, int start, int end) {
+    this(src, start, end, toWords(src, start, end), 0);
+  }
+
+  private BitReader(byte[] src, int start, int end, long[] words, long wordBit) {
     this.src = src;
     this.start = start;
     this.end = end;
+    this.words = words;
+    this.wordBit = wordBit;
   }
 
-  long u64At(long byteIdx) {
-    long abs = start + byteIdx;
-    if (abs + 8 <= end) {
-      return (long) LONG_LE.get(src, (int) abs);
+  /** A reader of {@code src[newStart, end)} sharing this one's words; {@code newStart >= start}. */
+  BitReader at(int newStart) {
+    return new BitReader(src, newStart, end, words, wordBit + 8L * (newStart - start));
+  }
+
+  private static long[] toWords(byte[] src, int start, int end) {
+    int len = end - start;
+    long[] w = new long[(len >>> 3) + 2];
+    int full = len >>> 3;
+    for (int k = 0; k < full; k++) {
+      w[k] = (long) LONG_LE.get(src, start + 8 * k);
     }
-    // the last bytes: past the end reads as zeros, like the reference's padding
     long r = 0;
-    for (int k = 7; k >= 0; k--) {
-      long j = abs + k;
-      r = (r << 8) | (j < end ? (src[(int) j] & 0xffL) : 0);
+    for (int j = end - 1; j >= start + 8 * full; j--) {
+      r = (r << 8) | (src[j] & 0xffL);
     }
-    return r;
+    w[full] = r;
+    return w;
+  }
+
+  private long word(long i) {
+    return i < words.length ? words[(int) i] : 0;
   }
 
   /** The {@code n} bits (0 to 64) at {@code bitIdx}, without moving. */
@@ -41,13 +64,12 @@ final class BitReader {
     if (n == 0) {
       return 0;
     }
-    long byteIdx = at >>> 3;
-    int off = (int) (at & 7);
-    long v = u64At(byteIdx) >>> off;
-    if (n > 64 - off - 0 && off > 0) {
-      v |= u64At(byteIdx + 8) << (64 - off);
-    }
-    return n == 64 ? v : v & ((1L << n) - 1);
+    long bit = wordBit + at;
+    long wi = bit >>> 6;
+    int off = (int) (bit & 63);
+    // the second word shifted in two steps, so an offset of 0 brings none of it
+    long v = (word(wi) >>> off) | ((word(wi + 1) << 1) << (63 - off));
+    return v & (-1L >>> (64 - n));
   }
 
   long readUint(int n) {
