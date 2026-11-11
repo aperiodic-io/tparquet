@@ -132,6 +132,19 @@ class ApiTest {
     assertFalse(Mode.floatQuant(3).equals(Mode.floatQuant(4)));
     assertFalse(Mode.floatQuant(3).equals("FloatQuant(3)"));
     assertEquals("Dict(2)", dict.mode.kind == Mode.Kind.DICT ? "Dict(" + dict.mode.dictLatents().length + ")" : "");
+    // lookback deltas have a delta latent variable
+    long[] periodic = new long[3000];
+    for (int i = 0; i < periodic.length; i++) {
+      periodic[i] = (i % 37) * 1000003L;
+    }
+    ChunkMeta lb = Pco.chunkMeta(NumberType.I64, periodic, new ChunkConfig().withDeltaSpec(DeltaSpec.TRY_LOOKBACK));
+    assertEquals(DeltaEncoding.Kind.LOOKBACK, lb.deltaEncoding.kind);
+    assertTrue(lb.deltaVar() != null && lb.deltaVar().bins.length >= 1);
+    // Mode prints as Rust's Debug does (with u64 latents)
+    assertEquals("Classic", Mode.CLASSIC.toString());
+    assertEquals("FloatQuant(3)", Mode.floatQuant(3).toString());
+    assertEquals("Dict(U64([" + Long.toUnsignedString(NumberType.I64.toLatentOrdered(5)) + ", "
+        + Long.toUnsignedString(NumberType.I64.toLatentOrdered(9)) + "]))", dict.mode.toString());
   }
 
   @Test
