@@ -185,7 +185,7 @@ reference), and every one agrees.
   missing test or dead code, and was fixed: targeted vectors, math special values, CORE-MATH's
   cbrt worst cases, unit tests, the reference's error kinds and payload messages, dead code
   removed. That took the score from 87% to 92% (2,663 of 2,898 mutants). The build fails below
-  90%. The checker `Modes.Margins` is itself tested without the oracle, in
+  91%. The checker `Modes.Margins` is itself tested without the oracle, in
   `OrderIndependenceTest`: its intervals hold the quotient of every summation order and are no
   wider than Higham's bound, its comparisons are exact at their boundaries, and it flags a
   constructed IntMult score tie between two bases that both win (2^54 - 1 and 2^54 + 1, one

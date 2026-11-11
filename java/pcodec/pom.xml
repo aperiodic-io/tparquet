@@ -43,7 +43,7 @@
     <!-- PIT's defaults; the oracle-mutants profile (make mutants-oracle) changes them -->
     <pit.oracle>/nonexistent</pit.oracle>
     <pit.oracle.traced>/nonexistent</pit.oracle.traced>
-    <pit.threshold>90</pit.threshold>
+    <pit.threshold>91</pit.threshold>
     <pit.timeout>8000</pit.timeout>
   </properties>
 
@@ -143,9 +143,8 @@
           <excludedMethods>
             <param>hashCode</param>
           </excludedMethods>
-          <!-- the score PIT reaches with the suites above (VERIFICATION.md, Mutation testing):
-               the survivors are in heuristics' decision margins, CORE-MATH's rounding
-               corrections and redundant bounds checks, which the oracle-backed suites judge -->
+          <!-- below the score PIT reaches with the suites above (92%); `make mutants-oracle`
+               judges the survivors with the oracle-backed suites too (VERIFICATION.md) -->
           <mutationThreshold>${pit.threshold}</mutationThreshold>
           <timestampedReports>false</timestampedReports>
           <outputFormats>
