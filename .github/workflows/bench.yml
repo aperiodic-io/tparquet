@@ -45,7 +45,7 @@ env:
 # about 1.2 GB of provider samples and is run by hand (`make bench`).
 jobs:
   check:
-    runs-on: ubuntu-standard
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: bench
@@ -64,7 +64,7 @@ jobs:
 
   mutmut:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-standard
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
       run:

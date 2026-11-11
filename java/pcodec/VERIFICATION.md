@@ -293,8 +293,8 @@ heuristics:
 - the half crate's F16C conversion path;
 - x86 NaN propagation.
 
-pcodec-java reproduces the reference on x86-64 Linux with glibc 2.39 (Ubuntu 24.04: the
-ubuntu-standard CI runners) and a stable Rust toolchain. A reference built for another platform (macOS libm,
+pcodec-java reproduces the reference on x86-64 Linux with glibc 2.39 (Ubuntu 24.04: GitHub's
+ubuntu-latest CI runners) and a stable Rust toolchain. A reference built for another platform (macOS libm,
 aarch64 without F16C) can itself produce different bytes for the same input. Decoding does not
 depend on the platform, except FloatMult's NaN payloads.
 

@@ -46,7 +46,7 @@ env:
 # Every job builds tparquet from ../python (maturin), hence the Rust toolchain and cache.
 jobs:
   lint:
-    runs-on: ubuntu-standard
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: polars-tparquet
@@ -63,7 +63,7 @@ jobs:
       - run: uv run --no-sync mypy
 
   test:
-    runs-on: ubuntu-standard
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +87,7 @@ jobs:
 
   mutmut:
     if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-standard
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
       run:
@@ -107,7 +107,7 @@ jobs:
           TPARQUET_TESTDATA: ${{ github.workspace }}/testdata
 
   build:
-    runs-on: ubuntu-standard
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: polars-tparquet
