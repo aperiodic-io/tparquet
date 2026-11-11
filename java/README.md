@@ -22,6 +22,9 @@ module targets 17. The JNI library is bundled in the `tparquet-jni` jar for linu
 
 ## Java
 
+[`INSTALL.md`](../INSTALL.md#java-parquet-java) has the steps for Maven and Gradle projects and
+for platforms other than Linux x86_64.
+
 ```java
 import io.aperiodic.tparquet.TparquetWriter;
 

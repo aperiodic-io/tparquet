@@ -2091,58 +2091,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parquet"
-version = "60.1.0"
-dependencies = [
- "ahash",
- "arrow",
- "arrow-array",
- "arrow-buffer",
- "arrow-cast",
- "arrow-csv",
- "arrow-data",
- "arrow-ipc",
- "arrow-schema",
- "arrow-select",
- "base64",
- "brotli",
- "bytes",
- "chrono",
- "clap",
- "crc32fast",
- "criterion",
- "flate2",
- "futures",
- "half",
- "hashbrown",
- "insta",
- "lz4_flex",
- "mimalloc",
- "num-bigint",
- "num-integer",
- "num-traits",
- "object_store",
- "opendal",
- "parquet-geospatial",
- "parquet-variant",
- "parquet-variant-compute",
- "proptest",
- "rand",
- "ring",
- "seq-macro",
- "serde",
- "serde_json",
- "simdutf8",
- "snap",
- "sysinfo",
- "tempfile",
- "tokio",
- "tparquet-core",
- "twox-hash",
- "zstd",
-]
-
-[[package]]
 name = "parquet-geospatial"
 version = "60.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3240,7 +3188,6 @@ dependencies = [
  "bytes",
  "clap",
  "futures",
- "parquet",
  "pco",
  "predicates",
  "proptest",
@@ -3248,6 +3195,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tparquet-core",
+ "tparquet-parquet",
  "zstd",
 ]
 
@@ -3290,6 +3238,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "tparquet-parquet"
+version = "60.1.0"
+dependencies = [
+ "ahash",
+ "arrow",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-cast",
+ "arrow-csv",
+ "arrow-data",
+ "arrow-ipc",
+ "arrow-schema",
+ "arrow-select",
+ "base64",
+ "brotli",
+ "bytes",
+ "chrono",
+ "clap",
+ "crc32fast",
+ "criterion",
+ "flate2",
+ "futures",
+ "half",
+ "hashbrown",
+ "insta",
+ "lz4_flex",
+ "mimalloc",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "object_store",
+ "opendal",
+ "parquet-geospatial",
+ "parquet-variant",
+ "parquet-variant-compute",
+ "proptest",
+ "rand",
+ "ring",
+ "seq-macro",
+ "serde",
+ "serde_json",
+ "simdutf8",
+ "snap",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "tparquet-core",
+ "twox-hash",
+ "zstd",
+]
+
+[[package]]
 name = "tparquet-python"
 version = "0.1.0"
 dependencies = [
@@ -3297,10 +3297,10 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "bytes",
- "parquet",
  "pyo3",
  "tparquet",
  "tparquet-core",
+ "tparquet-parquet",
 ]
 
 [[package]]

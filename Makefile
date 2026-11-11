@@ -28,8 +28,8 @@ clippy:
 
 test:
 	$(CARGO) test -j $(JOBS) $(OWN)
-	$(CARGO) test -j $(JOBS) -p parquet --lib -- pcodec
-	$(CARGO) test -j $(JOBS) -p parquet --test arrow_writer
+	$(CARGO) test -j $(JOBS) -p tparquet-parquet --lib -- pcodec
+	$(CARGO) test -j $(JOBS) -p tparquet-parquet --test arrow_writer
 	$(CARGO) test -j $(JOBS) --manifest-path $(UPSTREAM)
 
 c-test:
@@ -105,7 +105,7 @@ polars-mutants:
 # the fork's changed functions only (rust/parquet/FORK.md); the fork is rebuilt for every
 # mutant, so it is built without optimization here
 fork-mutants:
-	CARGO_PROFILE_DEV_PACKAGE_PARQUET_OPT_LEVEL=0 $(CARGO) mutants --no-config -p parquet -j $(JOBS) \
+	CARGO_PROFILE_DEV_PACKAGE_TPARQUET_PARQUET_OPT_LEVEL=0 $(CARGO) mutants --no-config -p tparquet-parquet -j $(JOBS) \
 	  -f rust/parquet/src/basic.rs -f rust/parquet/src/compression.rs \
 	  -f rust/parquet/src/column/writer/mod.rs -f rust/parquet/src/file/writer.rs \
 	  --re 'PcodecLevel|PcodecCodec|with_pcodec_version|CodecOptionsBuilder::set_physical_type|CodecOptionsBuilder::build|create_codec|<impl From<CompressionCodec> for Compression>::from|<impl From<Compression> for CompressionCodec>::from|<impl FromStr for Compression>::from_str|write_metadata' \
@@ -117,7 +117,7 @@ fork-mutants:
 # the upstream suite of the fork; without parquet-testing/arrow-testing, 340 tests fail
 # for want of that data, before and after the fork (see rust/parquet/FORK.md)
 fork-upstream-tests:
-	$(CARGO) test -j $(JOBS) -p parquet --all-features --no-fail-fast -- --test-threads $(JOBS)
+	$(CARGO) test -j $(JOBS) -p tparquet-parquet --all-features --no-fail-fast -- --test-threads $(JOBS)
 
 # cross-language acceptance (acceptance/cross/run.sh): Rust, Go, Python and DuckDB each read
 # the vectors all four wrote; needs python/.venv with the package and `make -C duckdb build`

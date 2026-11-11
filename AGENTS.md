@@ -41,4 +41,7 @@
   (`cpp/arrow`), `scripts/check-duckdb-fork.sh` (`duckdb`).
 - **Decoders treat payloads as untrusted.** No panics, no unbounded allocation; fuzz targets in
   `rust/core/fuzz`.
+- **Releases** publish `tparquet-core`, `tparquet-parquet` (the `rust/parquet` fork) and `tparquet`
+  to crates.io and the Python packages to PyPI (`RELEASING.md`); `scripts/check-publish.sh` must
+  pass, and those packages' versions move together.
 - Run the checks of what you changed before pushing (`make check` at the root runs everything).

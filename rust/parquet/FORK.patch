@@ -1,7 +1,34 @@
 diff --git upstream/Cargo.toml fork/Cargo.toml
-index b38b46b7501c4e399f44deed6fd7c35b86cf6819..ca22b34d9d9b32b36b6471cb96db2ee5a2853e48 100644
+index b38b46b7501c4e399f44deed6fd7c35b86cf6819..349562232b892555ec1b47a37a41a7a93710e531 100644
 --- upstream/Cargo.toml
 +++ fork/Cargo.toml
+@@ -12,7 +12,7 @@
+ [package]
+ edition = "2024"
+ rust-version = "1.88"
+-name = "parquet"
++name = "tparquet-parquet"
+ version = "60.1.0"
+ authors = ["Apache Arrow <dev@arrow.apache.org>"]
+ build = false
+@@ -21,7 +21,7 @@ autobins = false
+ autoexamples = false
+ autotests = false
+ autobenches = false
+-description = "Apache Parquet implementation in Rust"
++description = "The arrow-rs parquet crate 60.1.0 with the PCODEC compression codec, for tparquet"
+ readme = "README.md"
+ keywords = [
+     "arrow",
+@@ -29,7 +29,7 @@ keywords = [
+     "hadoop",
+ ]
+ license = "Apache-2.0"
+-repository = "https://github.com/apache/arrow-rs"
++repository = "https://github.com/aperiodic-io/tparquet"
+ 
+ [package.metadata.docs.rs]
+ all-features = true
 @@ -66,6 +66,7 @@ default = [
      "zstd",
      "base64",
@@ -18,22 +45,24 @@ index b38b46b7501c4e399f44deed6fd7c35b86cf6819..ca22b34d9d9b32b36b6471cb96db2ee5
  simdutf8 = ["dep:simdutf8"]
  test_common = ["arrow/test_utils"]
  variant_experimental = [
-@@ -543,6 +545,10 @@ default-features = false
+@@ -543,6 +545,11 @@ default-features = false
  version = "60.1.0"
  optional = true
  
 +[dependencies.tparquet-core]
++version = "0.1.0"
 +path = "../core"
 +optional = true
 +
  [dependencies.parquet-variant]
  version = "60.1.0"
  optional = true
-@@ -665,6 +671,9 @@ version = "0.59.1"
+@@ -665,6 +672,10 @@ version = "0.59.1"
  features = ["services-memory"]
  default-features = false
  
 +[dev-dependencies.tparquet-core]
++version = "0.1.0"
 +path = "../core"
 +
  [dev-dependencies.proptest]

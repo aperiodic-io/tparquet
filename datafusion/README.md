@@ -18,6 +18,8 @@ tree, on arrow 59, stays out of the root workspace, on arrow 60.
 
 ## Use
 
+[`INSTALL.md`](../INSTALL.md#datafusion) has the git and path forms of these dependencies.
+
 ```toml
 [dependencies]
 datafusion = "=55.2.0"

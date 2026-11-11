@@ -104,6 +104,8 @@ cc app.c -I rust/cread/include target/release/libtparquet_read.a -lpthread -ldl 
 
 ## Building
 
+[`INSTALL.md`](../INSTALL.md#c) covers using the installed package from another project.
+
 Ubuntu 24.04 packages (the CI list is in `.github/workflows/cpp.yml`):
 
 ```sh

@@ -34,6 +34,8 @@ platform (its footer names both). There is one patch per version:
 | 1.5.6 | `1.5.6.patch` | `build/v1.5.6/tparquet.duckdb_extension` |
 | 2.0.0 | `2.0.0.patch` | `build/v2.0.0/tparquet.duckdb_extension` |
 
+[`INSTALL.md`](../INSTALL.md#duckdb-extension) has the steps for every platform and client.
+
 ```sh
 make build                      # both versions (VERSIONS="2.0.0" for one); needs cmake, ninja, a C++ compiler, cargo
 ```

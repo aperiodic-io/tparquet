@@ -28,6 +28,8 @@ compression level, and the runnable examples.
 
 ## Building
 
+[`INSTALL.md`](../INSTALL.md#go) has the steps for using the package from your own module.
+
 The package is a cgo binding of the Rust C ABI in `rust/capi`. It needs a C compiler and the
 static library `libtparquet_capi.a`.
 

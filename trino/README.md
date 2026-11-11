@@ -17,6 +17,8 @@ next to the 1.17.0 one Spark uses ([`java/parquet-java`](../java/parquet-java/FO
 
 ## Installing into Trino 484
 
+[`INSTALL.md`](../INSTALL.md#trino) also covers the JDKs, clusters and Docker images.
+
 ```sh
 make -C trino plugin-jars                       # trino/plugin-jars/target/tparquet-jars
 trino/install-tparquet.sh /usr/lib/trino        # the server's TRINO_HOME (it has plugin/)
