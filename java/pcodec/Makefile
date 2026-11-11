@@ -5,7 +5,7 @@ MVN ?= mvn -B
 SCALE ?= 1
 ORACLE := oracle/target/release/pcodec-oracle
 
-.PHONY: oracle test parity vectors vectors-check proofs mutants mutants-oracle bench check
+.PHONY: oracle test parity vectors vectors-check proofs coverage mutants mutants-oracle bench check
 
 oracle:
 	cargo build --release --manifest-path oracle/Cargo.toml
@@ -45,6 +45,11 @@ bench: oracle
 proofs:
 	python3 -u verification/proofs.py
 
+# every method of the library mapped to its evidence (verification/coverage.txt, VERIFICATION.md)
+coverage:
+	$(MVN) -q compile
+	python3 verification/coverage.py
+
 # PIT on the library, judged by the suites that need no oracle (threshold in pom.xml)
 mutants:
 	$(MVN) test-compile org.pitest:pitest-maven:mutationCoverage
@@ -60,4 +65,4 @@ mutants-oracle: oracle
 	PIT_ONLY_LISTED=$(CURDIR)/target/pit-survivors.txt \
 	  $(MVN) -P oracle-mutants test-compile org.pitest:pitest-maven:mutationCoverage
 
-check: parity vectors-check proofs
+check: parity vectors-check proofs coverage

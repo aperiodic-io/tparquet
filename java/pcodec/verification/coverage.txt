@@ -1,0 +1,131 @@
+# What verifies each method of the library; checked by verification/coverage.py (make coverage).
+# A method gets the evidence of every line whose pattern matches it. Kinds, strongest first:
+# proof (Z3, every input), exhaustive (every input of a bounded domain), vectors (recorded
+# reference outputs), differential (the live reference), unit, trivial. The end-to-end suites
+# (VectorsTest: 8,123 recorded reference answers; ParityTest; ExhaustiveParityTest) run every
+# method of the compressor and the decompressor, so they are listed for every class on that path.
+
+# --- end to end: the whole compressor and decompressor ---------------------------------------
+Pco.*                       vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest exhaustive:ExhaustiveParityTest#everyPairOfBytesAndEveryShortValue exhaustive:ExhaustiveParityTest#decoderOnEveryShortSuffix
+Pco.checkRaw                unit:ApiTest#compressRejectsRawValuesWiderThanTheType
+Pco.decompress              unit:ApiTest#decodersRefuseARangeOutsideTheArray unit:ApiTest#wholeFileDecodeCanBeBounded unit:ApiTest#countBoundStopsBeforeDecoding
+Pco.peekNumberType          unit:ApiTest#headerAndPeeking
+Pco.decompress[IFLD]*       unit:RoundTripTest#typedApi
+Pco$*                       vectors:VectorsTest#javaGivesTheRecordedAnswers unit:ApiTest#wholeFileDecodeCanBeBounded
+Pco$Header.<init>           trivial:record
+Pco$Decoded.<init>          trivial:record
+Pco$CountExceeded.<init>    trivial:exception
+Pco$BatchSink.accept        trivial:interface
+Pco$Dst.*                   trivial:interface
+ChunkCompressor*            vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest exhaustive:ExhaustiveParityTest#everyPairOfBytesAndEveryShortValue exhaustive:ExhaustiveParityTest#everySequenceWithTryModes exhaustive:ExhaustiveParityTest#everySequenceAroundTheSampleThreshold
+ChunkCompressor$LatentCompressor.writeDissectedBatch  unit:BitIoTest#stagedWriterWritesWhatTheBitModelWrites
+ChunkDecompressor*          vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#decoderAgreesOnCorruptFiles exhaustive:ExhaustiveParityTest#decoderOnEveryShortSuffix exhaustive:ExhaustiveParityTest#decoderOnEveryThreeByteBody unit:RoundTripTest#decoderFailsOnlyWithPcoException
+ChunkMeta*                  vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#chunkMetadataEqualsTheReferences exhaustive:ExhaustiveParityTest#decoderOnEveryShortSuffix
+ChunkMeta*.toString         unit:ApiTest#metadataInspection
+ChunkConfig.*               vectors:VectorsTest#javaGivesTheRecordedAnswers unit:ApiTest#configErrors unit:ApiTest#specsPrintTheirValues
+PagingSpec.*                vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#pagingSpecs unit:ApiTest#specsPrintTheirValues
+PagingSpec.nPerPage         exhaustive:InvariantsTest#equalPagesSumToTheCountWithinTheLimitAndDifferByAtMostOne
+DeltaSpec*                  vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#everyDeltaSpec unit:ApiTest#specsPrintTheirValues
+ModeSpec*                   vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#everyModeSpec unit:ApiTest#specsPrintTheirValues
+NumberType*                 vectors:VectorsTest#javaGivesTheRecordedAnswers unit:ModesTest#orderedLatents
+NumberType.*LatentOrdered   proof:ordered_latents
+PcoException*               vectors:VectorsTest#javaGivesTheRecordedAnswers unit:RoundTripTest#decoderFailsOnlyWithPcoException differential:ParityTest#decoderAgreesOnCorruptFiles
+PcoPanic.<init>             trivial:exception
+
+# --- bit I/O --------------------------------------------------------------------------------
+BitWriter.*                 unit:BitIoTest#stagedWriterWritesWhatTheBitModelWrites vectors:VectorsTest#javaGivesTheRecordedAnswers
+BitWriter.writeUint         proof:bit_io
+BitWriter.writeBatch        proof:bit_io
+BitWriter.finishByte        proof:bit_io
+BitWriter.ensure            unit:BitIoTest#aBatchOfWideValuesGrowsAnUnreservedWriter
+BitWriter.grownCapacity     unit:ApiTest#bitWriterGrowsToTheLimitAndNoFurther
+BitWriter.writeAlignedBytes unit:ApiTest#bitWriterRefusesUnalignedBytes
+BitReader.*                 vectors:VectorsTest#javaGivesTheRecordedAnswers exhaustive:ExhaustiveParityTest#decoderOnEveryShortSuffix
+BitReader.peekAt            proof:bit_io
+BitReader.readUint          proof:bit_io
+LongIndexMap.*              exhaustive:InvariantsTest#longIndexMapIsALinkedHashMapOnEverySequenceUpToSeven unit:BitIoTest#longIndexMapNumbersKeysInFirstInsertionOrder
+
+# --- latents and numbers --------------------------------------------------------------------
+Latent.*                    vectors:VectorsTest#javaGivesTheRecordedAnswers
+Latent.add                  proof:latent_ops
+Latent.sub                  proof:latent_ops
+Latent.mul                  proof:latent_ops
+Latent.toggleCenter         proof:latent_ops
+Latent.lt                   proof:latent_ops
+Latent.div                  proof:latent_ops
+Latent.rem                  proof:latent_ops
+Latent.toF64                proof:conversions
+Latent.toString             trivial:toString
+FloatType*                  vectors:MathVectorsTest#javaGivesTheRecordedDigests differential:MathParityTest
+FloatType.intFloat*         proof:int_float
+FloatType.f16*              exhaustive:MathParityTest#everyF16ToF32AndF64 exhaustive:ExhaustiveParityTest#everyF16
+FloatType.f32BitsToF16Bits  exhaustive:MathParityTest#everyF32ToF16
+FloatType.f64ToF32Bits      exhaustive:MathParityTest#f64ToF16
+RustMath.*                  vectors:MathVectorsTest#javaGivesTheRecordedDigests unit:RustMathTest#roundingAndCasts unit:RustMathTest#minAndMaxIgnoreNan
+RustMath.round*             proof:rounding
+RustMath.f64ToUnsigned      proof:saturating_casts
+RustMath.u64ToF32           proof:conversions
+GlibcMath.*                 vectors:MathVectorsTest#javaGivesTheRecordedDigests differential:MathParityTest#log2AndCbrtOfRandomPositiveDoubles
+GlibcMath.log2              exhaustive:MathParityTest#log2OfEveryCountUpTo2Pow24 differential:MathParityTest#log2NearEveryPowerOfTwoAndNearOne
+GlibcMath.pow10             exhaustive:MathParityTest#pow10OfEveryInteger
+
+# --- entropy coding and bins ----------------------------------------------------------------
+Ans.*                       vectors:VectorsTest#javaGivesTheRecordedAnswers unit:AnsTest#spreadMatchesReference
+Ans.quantizeWeights*        exhaustive:InvariantsTest#quantizedWeightsArePositiveAndFillTheTableForEveryCountVector unit:AnsTest#quantizeWeightsMatchesReference
+Ans$*                       exhaustive:AnsTest#decoderInvertsEncoderForEveryTableUpTo16States vectors:VectorsTest#javaGivesTheRecordedAnswers
+Histogram*                  exhaustive:InvariantsTest#histogramBinsCoverEveryValueOnceInOrderForEveryArrayUpToSix vectors:HistogramTest#referenceVectors vectors:HistogramTest#referenceVectorsOfApplySorted unit:HistogramTest#binsAreExactSortedAndTight
+Histogram.*ForTest          trivial:test_hook
+SortUtils.*                 exhaustive:InvariantsTest#partitionPermutesAndSplitsAtThePivotForEveryArrayUpToSix unit:HistogramTest#sortUtilsMatchAFullSort unit:HistogramTest#heapsortFallbackGivesTheSameBins
+SortUtils.breakPatterns     vectors:RustMathTest#breakPatternsPermutesAsTheReference
+BinOptimization*            exhaustive:InvariantsTest#trainedBinsCoverEveryLatentAndWeighToTheTableForEveryArrayUpToFive vectors:BinOptimizationTest#referenceVectors unit:BinOptimizationTest#trainedBinsAscendByLowerBound
+BinOptimization.log2*       unit:BinOptimizationTest#log2ApproxIsExactAtPowersOfTwoAndMonotone
+
+# --- delta encodings ------------------------------------------------------------------------
+Delta*                      vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#everyDeltaSpec
+Delta.consecutive*          proof:consecutive vectors:DeltaTest#consecutiveReferenceVector
+Delta.lookback*             proof:lookback vectors:DeltaTest#lookbackReferenceVectorAndRoundTrips
+Delta.conv1*                proof:conv1 unit:DeltaTest#conv1RoundTrips
+Delta.predictOne            unit:DeltaTest#conv1RoundTrips  # the conv1 proof leaves the prediction uninterpreted
+Delta.encodeInPlace         unit:DeltaTest#consecutiveRoundTrips
+DeltaEncoding*              vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#everyDeltaSpec exhaustive:ExhaustiveParityTest#decoderOnEveryShortSuffix
+DeltaEncoding*.toString     unit:ApiTest#metadataInspection
+
+# --- modes ----------------------------------------------------------------------------------
+Modes*                      vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#everyModeSpec differential:ReferenceDeterminismTest exhaustive:ExhaustiveParityTest#everySequenceWithTryModes unit:OrderIndependenceTest#noDecisionDependsOnTheReferencesHashMapOrder
+Modes.classicSplit          proof:classic
+Modes$IntMult.splitLatents  proof:int_mult
+Modes$IntMult*              unit:ModesTest#intMult unit:OrderIndependenceTest#intMultKeepsEveryCandidateWithTheBestScore
+Modes$FloatQuant.*          unit:ModesTest#floatQuantSplitsAsTheReference
+Modes$FloatQuant.splitLatents proof:float_quant
+Modes$FloatQuant.sh[lr]    proof:float_quant
+Modes$Dict.*                differential:DictParityTest unit:ModesTest#dictUsesAForcedOrderAndRejectsOneThatIsNotTheReferencesSort
+Modes$Margins.*             unit:OrderIndependenceTest#theIntervalHoldsTheQuotientOfEveryOrderAndIsTight unit:OrderIndependenceTest#thresholdFlagsExactlyTheIntervalsOnBothSidesOfIt
+Modes.modeIsValid           unit:ModesTest#modeValidity
+Modes$Filter.apply          trivial:interface
+Modes$PrimaryAndSavings.apply trivial:interface
+Modes$PrimaryFn.primary     trivial:interface
+Modes$Splitter.split        trivial:interface
+Modes$IntMult$F.f           trivial:interface
+FloatMult*                  vectors:VectorsTest#javaGivesTheRecordedAnswers unit:ModesTest#floatMultAsTheReference differential:ParityTest#everyModeSpec
+Mode*                       vectors:VectorsTest#javaGivesTheRecordedAnswers differential:ParityTest#chunkMetadataEqualsTheReferences unit:ApiTest#metadataInspection
+
+# --- the tparquet payload -------------------------------------------------------------------
+payload.*                   vectors:PayloadVectorsTest#vectors differential:PayloadParityTest
+payload.Varint.*            proof:varints unit:PayloadUnitTest#varintsAsTheReference
+payload.Decimal.exact       unit:PayloadUnitTest#exactAsTheReference
+payload.Decimal.exponent    unit:PayloadUnitTest#exponentAsTheReference
+payload.Decimal.split       unit:PayloadUnitTest#splitAsTheReference
+payload.Decimal.round       proof:rounding unit:PayloadUnitTest#decimalRoundIsRustsRound
+payload.PcodecPayload$Sink.* unit:PayloadUnitTest#sinkNeverGrowsPastTheExpectedSize
+payload.PcodecPayload.decompress unit:PayloadUnitTest#decompressRefusesARangeOutsideThePayload unit:PayloadUnitTest#decompressIntoABufferWritesOnlyItsRange unit:PayloadUnitTest#errorsAsTheReference
+payload.ZstdCodec.*         trivial:interface
+payload.PcodecPayload$Batches.accept trivial:interface
+payload.PayloadException.<init> trivial:exception
+
+# --- generated by javac, no code of ours ------------------------------------------------------
+*$Kind.values               trivial:enum
+*$Kind.valueOf              trivial:enum
+NumberType.values           trivial:enum
+NumberType.valueOf          trivial:enum
+payload.ParquetType.value*  trivial:enum
+*.<init>                    trivial:constructor

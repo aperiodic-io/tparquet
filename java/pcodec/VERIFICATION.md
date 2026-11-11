@@ -74,7 +74,7 @@ and a delta encoding (`RoundTripTest.referenceCannotDecodeDictWithDelta`).
 
 ## 2. Proofs (`verification/proofs.py`, Z3)
 
-93 theorems, all proved, in under a minute. Each theorem is stated for all inputs of its widths. It is proved when Z3 shows its negation
+133 theorems, all proved, in about a minute. Each theorem is stated for all inputs of its widths. It is proved when Z3 shows its negation
 unsatisfiable. The Java side is transcribed from the named method, the Rust side from pco.
 
 | Theorem | Widths |
@@ -86,6 +86,9 @@ unsatisfiable. The Java side is transcribed from the named method, the Rust side
 | `intFloatFromLatent(intFloatToLatent(m)) == m` for every integer-valued, infinite or NaN `m`, which makes FloatMult lossless | f32, f64 |
 | consecutive delta: `decode(encode(x)) == x`, batch decoding as the decoder does it | n <= 6, order <= 4 |
 | lookback delta: `decode(encode(x)) == x` for every valid choice of lookbacks | n <= 5, state <= 2 |
+| conv1 delta: `decode(encode(x)) == x` for every prediction, the prediction left as an uninterpreted function of the window (so the proof holds whatever `predictOne` computes) | u16, u32, u64; order 1..4; n = order + 1, + 3, + 6 |
+| the staged `BitWriter`: `writeUint` with and without a store leaves the stored word and the register holding the stream and nothing above it; `writeBatch`'s ANS-step rest is `writeUint`'s; `finishByte` pads with zero bits | every value, width and register fill |
+| the word-array `BitReader.peekAt` returns bits `[off, off + n)` of its two words | every offset 0..63, 1..64 bits |
 | `BitWriter.writeUint` then `BitReader.readUint` returns the value, and leaves earlier bits alone | 1..64 bits, every bit offset |
 | `Varint`: `get(put(v)) == v` within 10 bytes | every u64 |
 | `RustMath.roundF64`/`roundF32` equal IEEE roundToIntegral(RNA), bit for bit | every finite f64, f32 |
@@ -227,6 +230,30 @@ reference), and every one agrees.
 
   `hashCode` is excluded, since any constant satisfies its contract.
 
+## 7. Coverage (`verification/coverage.py`, `make coverage`)
+
+`verification/coverage.txt` maps every method of the library to the evidence that checks it,
+and `coverage.py` enforces it in CI: it lists every method `javap` finds in `target/classes`
+(483 in 82 classes; compiler-generated lambdas and accessors left out), fails on any method no
+entry matches, and fails on any entry that names a test, test method or theorem group that does
+not exist or matches no method. Counted by each method's strongest evidence:
+
+| evidence | methods | what it means |
+|---|---:|---|
+| proof | 36 | a Z3 theorem over every input of the method's widths (section 2) |
+| exhaustive | 208 | every input of a bounded domain: `ExhaustiveParityTest` for the whole compressor and decoder, `InvariantsTest`, `MathParityTest`'s complete domains, `AnsTest`'s every table up to 16 states |
+| vectors | 238 | recorded reference outputs, no oracle needed: `VectorsTest` (8,123 answers), the math digests, the payload and conformance vectors |
+| trivial | 1 | an exception constructor with no logic |
+
+`InvariantsTest` checks, for every input of its domain, what the heuristics must keep whatever
+they decide: partition permutes and splits at the pivot, heapsort sorts, the histogram's bins
+are ordered, disjoint and count every value, trained bins cover every latent and their weights
+fill the ANS table, quantized weights are positive and sum to `2^sizeLog`, equal pages differ by
+at most one, and `LongIndexMap` numbers keys as a `LinkedHashMap` does. The heuristics' decisions
+themselves (which mode, which bins, which delta) have no specification but the reference, so
+they are checked against it: exhaustively over bounded inputs, and on the recorded and live
+corpora.
+
 ## Differences found
 
 The port matched the reference on most cases from the first run. These are the differences the
@@ -254,6 +281,13 @@ layers found, all fixed:
    that. Recorded vectors now cover every such cut.
 
 ## Limits
+
+**What "whole code" covers.** Every method has evidence (section 7), but only 36 have a proof
+over every input. The proofs are of a transcription: each states the Java method's expression in
+Z3 by hand, so a theorem and the code can drift apart; the vector and exhaustive suites run the
+code itself and catch such a drift in the outputs. The heuristics (mode and bin search, the delta
+choice) are not proved equal to the reference for every input; they are equal on every input of
+the bounded domains and on the corpora, and their nondeterminism is handled as below.
 
 **Nondeterminism of the reference, and how it is still verified.** pco 1.0.4 iterates Rust
 `HashMap`s, whose order is seeded per process, in three heuristics. Its output can therefore
