@@ -1,11 +1,17 @@
-# Builds the static library and runs the plain-C smoke test.
+# Builds the static library and runs the plain-C tests. CARGO_TARGET_DIR is honoured, so the
+# library is found wherever cargo puts it.
 ROOT := $(abspath ../..)
-LIB := $(ROOT)/target/release/libtparquet_capi.a
+TARGET_DIR := $(or $(CARGO_TARGET_DIR),$(ROOT)/target)
+LIB := $(TARGET_DIR)/release/libtparquet_capi.a
+CFLAGS := -O2 -Wall -Wextra -Werror -pthread -I include
+LDLIBS := -lpthread -ldl -lm
 
 .PHONY: lib c-test
 lib:
 	cargo build --release -p tparquet-capi
 
 c-test: lib
-	$(CC) -O2 -Wall -Wextra -Werror -I include tests/c/smoke.c $(LIB) -lpthread -ldl -lm -o $(ROOT)/target/pcp-smoke
-	$(ROOT)/target/pcp-smoke
+	$(CC) $(CFLAGS) tests/c/smoke.c $(LIB) $(LDLIBS) -o $(TARGET_DIR)/pcp-smoke
+	$(CC) $(CFLAGS) tests/c/api.c $(LIB) $(LDLIBS) -o $(TARGET_DIR)/pcp-api
+	$(TARGET_DIR)/pcp-smoke
+	$(TARGET_DIR)/pcp-api

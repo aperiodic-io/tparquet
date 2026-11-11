@@ -1,0 +1,401 @@
+diff --git a/extension/parquet/CMakeLists.txt b/extension/parquet/CMakeLists.txt
+index 93feb0f..052d76d 100644
+--- a/extension/parquet/CMakeLists.txt
++++ b/extension/parquet/CMakeLists.txt
+@@ -4,13 +4,18 @@ project(ParquetExtension)
+ 
+ # Before any subdirectory or target, which would otherwise inherit the
+ # directory-wide definition
+-set_extension_version_sources(parquet parquet_extension.cpp)
++set_extension_version_sources(tparquet parquet_extension.cpp) # tparquet: the extension's name
+ 
+ include_directories(
+   include ../../third_party/lz4 ../../third_party/parquet
+   ../../third_party/thrift ../../third_party/snappy
+   ../../third_party/brotli/include)
+ 
++# tparquet: the PCODEC codec, the C ABI of tparquet's rust/capi (tparquet.h, libtparquet_capi.a)
++set(TPARQUET_CAPI_INCLUDE_DIR "" CACHE PATH "directory of tparquet.h")
++set(TPARQUET_CAPI_LIBRARY "" CACHE FILEPATH "libtparquet_capi.a")
++include_directories(${TPARQUET_CAPI_INCLUDE_DIR})
++
+ add_subdirectory(decoder)
+ add_subdirectory(reader)
+ add_subdirectory(writer)
+@@ -87,11 +92,11 @@ if(NOT CLANG_TIDY)
+       ../../third_party/brotli/dec/bit_reader.cpp)
+ endif()
+ 
+-build_extension_library(parquet ${PARQUET_EXTENSION_FILES})
+-target_link_libraries(parquet_loadable_extension duckdb_mbedtls duckdb_zstd)
++build_extension_library(tparquet ${PARQUET_EXTENSION_FILES})
++target_link_libraries(tparquet_loadable_extension duckdb_mbedtls duckdb_zstd ${TPARQUET_CAPI_LIBRARY})
+ 
+ install(
+-  TARGETS parquet_extension
++  TARGETS tparquet_extension
+   EXPORT "${DUCKDB_EXPORT_SET}"
+   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
+   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+diff --git a/extension/parquet/column_reader.cpp b/extension/parquet/column_reader.cpp
+index 54519df..25a66eb 100644
+--- a/extension/parquet/column_reader.cpp
++++ b/extension/parquet/column_reader.cpp
+@@ -46,6 +46,7 @@
+ #include "parquet_rle_bp_decoder.hpp"
+ #include "thrift/protocol/TProtocol.h"
+ #include "thrift_tools.hpp"
++#include "tparquet.h"
+ 
+ namespace duckdb_apache {
+ namespace thrift {
+@@ -664,6 +665,15 @@ void ColumnReader::DecompressInternal(CompressionCodec::type codec, const_data_p
+ 		duckdb_brotli::BrotliDecoderDestroyInstance(state);
+ 		break;
+ 	}
++	case CompressionCodec::PCODEC: { // tparquet: spec/FORMAT.md
++		if (pcp_decompress(src, src_size, dst, dst_size) != PCP_OK) {
++			char message[256];
++			pcp_last_error(message, sizeof(message));
++			throw InvalidInputException("Failed to read file \"%s\": PCODEC decompression failure: %s",
++			                            Reader().GetFileName(), message);
++		}
++		break;
++	}
+ 
+ 	default: { // LCOV_EXCL_START
+ 		duckdb::stringstream codec_name;
+diff --git a/extension/parquet/column_writer.cpp b/extension/parquet/column_writer.cpp
+index fbe5e71..5b470e2 100644
+--- a/extension/parquet/column_writer.cpp
++++ b/extension/parquet/column_writer.cpp
+@@ -22,6 +22,8 @@
+ #include "miniz_wrapper.hpp"
+ #include "snappy.h"
+ #include "zstd.h"
++#include "tparquet.h"
++#include "zstd_file_system.hpp"
+ #include "duckdb/common/allocator.hpp"
+ #include "duckdb/common/hugeint.hpp"
+ #include "duckdb/common/limits.hpp"
+@@ -171,7 +173,7 @@ ColumnWriterState::~ColumnWriterState() {
+ 
+ void ColumnWriter::CompressPage(MemoryStream &temp_writer, size_t &compressed_size, data_ptr_t &compressed_data,
+                                 AllocatedData &compressed_buf) {
+-	switch (writer.GetCodec()) {
++	switch (writer.GetCodec(SchemaIndex())) {
+ 	case CompressionCodec::UNCOMPRESSED:
+ 		compressed_size = temp_writer.GetPosition();
+ 		compressed_data = temp_writer.GetData();
+@@ -207,9 +209,12 @@ void ColumnWriter::CompressPage(MemoryStream &temp_writer, size_t &compressed_si
+ 	case CompressionCodec::ZSTD: {
+ 		compressed_size = duckdb_zstd::ZSTD_compressBound(temp_writer.GetPosition());
+ 		compressed_buf = BufferAllocator::Get(writer.GetContext()).Allocate(compressed_size);
++		// tparquet: the compression level of a PCODEC file is PCODEC's
++		auto level = writer.GetCodec() == CompressionCodec::PCODEC ? ZStdFileSystem::DefaultCompressionLevel()
++		                                                           : writer.CompressionLevel();
+ 		compressed_size = duckdb_zstd::ZSTD_compress((void *)compressed_buf.get(), compressed_size,
+ 		                                             (const void *)temp_writer.GetData(), temp_writer.GetPosition(),
+-		                                             UnsafeNumericCast<int32_t>(writer.CompressionLevel()));
++		                                             UnsafeNumericCast<int32_t>(level));
+ 		compressed_data = compressed_buf.get();
+ 		break;
+ 	}
+@@ -222,6 +227,19 @@ void ColumnWriter::CompressPage(MemoryStream &temp_writer, size_t &compressed_si
+ 		compressed_data = compressed_buf.get();
+ 		break;
+ 	}
++	case CompressionCodec::PCODEC: { // tparquet: spec/FORMAT.md
++		compressed_size = pcp_compress_bound(temp_writer.GetPosition());
++		compressed_buf = BufferAllocator::Get(writer.GetContext()).Allocate(compressed_size);
++		if (pcp_compress(temp_writer.GetData(), temp_writer.GetPosition(), writer.GetType(SchemaIndex()),
++		                 UnsafeNumericCast<int32_t>(writer.CompressionLevel()), 1, compressed_buf.get(), compressed_size,
++		                 &compressed_size) != PCP_OK) {
++			char message[256];
++			pcp_last_error(message, sizeof(message));
++			throw IOException("Parquet writer: PCODEC compression failure: %s", message);
++		}
++		compressed_data = compressed_buf.get();
++		break;
++	}
+ 	default:
+ 		throw InternalException("Unsupported codec for Parquet Writer");
+ 	}
+diff --git a/extension/parquet/include/parquet_writer.hpp b/extension/parquet/include/parquet_writer.hpp
+index a151f7b..ca85d5b 100644
+--- a/extension/parquet/include/parquet_writer.hpp
++++ b/extension/parquet/include/parquet_writer.hpp
+@@ -217,6 +217,22 @@ public:
+ 	duckdb_parquet::CompressionCodec::type GetCodec() {
+ 		return options.codec;
+ 	}
++	//! tparquet: the codec of one column. PCODEC compresses INT32, INT64, FLOAT and DOUBLE columns; the other
++	//! columns of a PCODEC file get ZSTD
++	duckdb_parquet::CompressionCodec::type GetCodec(idx_t schema_idx) {
++		if (options.codec != duckdb_parquet::CompressionCodec::PCODEC) {
++			return options.codec;
++		}
++		switch (GetType(schema_idx)) {
++		case duckdb_parquet::Type::INT32:
++		case duckdb_parquet::Type::INT64:
++		case duckdb_parquet::Type::FLOAT:
++		case duckdb_parquet::Type::DOUBLE:
++			return duckdb_parquet::CompressionCodec::PCODEC;
++		default:
++			return duckdb_parquet::CompressionCodec::ZSTD;
++		}
++	}
+ 	duckdb_parquet::Type::type GetType(idx_t schema_idx) {
+ 		return file_meta_data.schema[schema_idx].type;
+ 	}
+diff --git a/extension/parquet/include/writer/templated_column_writer.hpp b/extension/parquet/include/writer/templated_column_writer.hpp
+index e75c53e..0aba11c 100644
+--- a/extension/parquet/include/writer/templated_column_writer.hpp
++++ b/extension/parquet/include/writer/templated_column_writer.hpp
+@@ -234,6 +234,12 @@ public:
+ 		const auto type = writer.GetType(SchemaIndex());
+ 
+ 		auto &state = state_p.Cast<StandardColumnWriterState<SRC, TGT, OP>>();
++		if (writer.GetCodec(SchemaIndex()) == duckdb_parquet::CompressionCodec::PCODEC) {
++			// tparquet: PCODEC compresses the plain values (spec/FORMAT.md, writer recommendations)
++			state.dictionary.Reset();
++			state.encoding = duckdb_parquet::Encoding::PLAIN;
++			return;
++		}
+ 		if (state.dictionary.GetSize() == 0 || state.dictionary.IsFull()) {
+ 			state.dictionary.Reset();
+ 			if (writer.GetParquetVersion() == ParquetVersion::V1) {
+diff --git a/extension/parquet/parquet_extension.cpp b/extension/parquet/parquet_extension.cpp
+index fc01e0d..404c38d 100644
+--- a/extension/parquet/parquet_extension.cpp
++++ b/extension/parquet/parquet_extension.cpp
+@@ -89,7 +89,7 @@ class PhysicalOperator;
+ struct ParquetWriteBindData : public TableFunctionData {
+ 	vector<LogicalType> sql_types;
+ 	vector<string> column_names;
+-	duckdb_parquet::CompressionCodec::type codec = duckdb_parquet::CompressionCodec::SNAPPY;
++	duckdb_parquet::CompressionCodec::type codec = duckdb_parquet::CompressionCodec::PCODEC; // tparquet
+ 	vector<pair<string, string>> kv_metadata;
+ 	idx_t row_group_size = DEFAULT_ROW_GROUP_SIZE;
+ 	idx_t row_group_size_bytes = NumericLimits<idx_t>::Maximum();
+@@ -202,10 +202,12 @@ static unique_ptr<FunctionData> ParquetWriteBind(ClientContext &context, CopyFun
+ 				/* LZ4 is technically another compression scheme, but deprecated and arrow also uses them
+ 				 * interchangeably */
+ 				bind_data->codec = duckdb_parquet::CompressionCodec::LZ4_RAW;
++			} else if (roption == "pcodec") { // tparquet
++				bind_data->codec = duckdb_parquet::CompressionCodec::PCODEC;
+ 			} else {
+-				throw BinderException(
+-				    "Expected %s argument to be any of [uncompressed, brotli, gzip, snappy, lz4, lz4_raw or zstd]",
+-				    option_name);
++				throw BinderException("Expected %s argument to be any of [uncompressed, brotli, gzip, snappy, lz4, "
++				                      "lz4_raw, zstd or pcodec]",
++				                      option_name);
+ 			}
+ 		} else if (option_name == "field_ids") {
+ 			if (option_values[0].type().id() == LogicalTypeId::VARCHAR &&
+@@ -371,8 +373,14 @@ static unique_ptr<FunctionData> ParquetWriteBind(ClientContext &context, CopyFun
+ 		}
+ 	}
+ 
+-	if (compression_level_set && bind_data->codec != CompressionCodec::ZSTD) {
+-		throw BinderException("Compression level is only supported for the ZSTD compression codec");
++	if (bind_data->codec == CompressionCodec::PCODEC) { // tparquet
++		if (!compression_level_set) {
++			bind_data->compression_level = -1; // PCODEC's default (8)
++		} else if (bind_data->compression_level < 0 || bind_data->compression_level > 12) {
++			throw BinderException("Compression level must be between 0 and 12 for the PCODEC compression codec");
++		}
++	} else if (compression_level_set && bind_data->codec != CompressionCodec::ZSTD) {
++		throw BinderException("Compression level is only supported for the ZSTD and PCODEC compression codecs");
+ 	}
+ 
+ 	bind_data->sql_types = sql_types;
+@@ -532,6 +540,8 @@ const char *EnumUtil::ToChars<duckdb_parquet::CompressionCodec::type>(duckdb_par
+ 	case CompressionCodec::ZSTD:
+ 		return "ZSTD";
+ 		break;
++	case CompressionCodec::PCODEC: // tparquet
++		return "PCODEC";
+ 	default:
+ 		throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+ 	}
+@@ -563,6 +573,9 @@ duckdb_parquet::CompressionCodec::type EnumUtil::FromString<duckdb_parquet::Comp
+ 	if (StringUtil::Equals(value, "ZSTD")) {
+ 		return CompressionCodec::ZSTD;
+ 	}
++	if (StringUtil::Equals(value, "PCODEC")) { // tparquet
++		return CompressionCodec::PCODEC;
++	}
+ 	throw NotImplementedException(StringUtil::Format("Enum value: '%s' not implemented", value));
+ }
+ 
+@@ -1050,51 +1063,50 @@ static unique_ptr<FunctionData> ParquetCopyFromBind(ClientContext &context, Copy
+ 
+ static void LoadInternal(ExtensionLoader &loader) {
+ 	auto &db_instance = loader.GetDatabaseInstance();
+-	auto &fs = db_instance.GetFileSystem();
+-	fs.RegisterCompressionFilesystem(make_uniq<ZStdFileSystem>());
+-
+-	auto scan_fun = MultiFileReader::CreateFunctionSet(ParquetScanFunction::GetMultiFileFunction("read_parquet"));
+-	scan_fun.SetName("read_parquet");
++	// tparquet: the extension loads next to DuckDB's own parquet extension, which registers the compression file
++	// system, the variant functions, the replacement scan and the settings; every function gets a name of its own
++	// (a function of an existing name would replace DuckDB's), with "tparquet" for "parquet"
++	auto renamed = [](TableFunctionSet set) {
++		set.SetName(Identifier(StringUtil::Replace(set.name.GetIdentifierName(), "parquet", "tparquet")));
++		return set;
++	};
++
++	auto scan_fun = MultiFileReader::CreateFunctionSet(ParquetScanFunction::GetMultiFileFunction("read_tparquet"));
++	scan_fun.SetName("read_tparquet");
+ 	loader.RegisterFunction(scan_fun);
+-	scan_fun.SetName("parquet_scan");
++	scan_fun.SetName("tparquet_scan");
+ 	loader.RegisterFunction(scan_fun);
+ 
+ 	// the single-file parquet reader that the multi-file reader above is built on
+-	TableFunctionSet single_file_set("read_single_parquet_file");
++	TableFunctionSet single_file_set("read_single_tparquet_file");
+ 	single_file_set.AddFunction(ParquetScanFunction::GetSingleFileFunction());
+ 	loader.RegisterFunction(std::move(single_file_set));
+ 
+ 	// parquet_metadata
+ 	ParquetMetaDataFunction meta_fun;
+-	loader.RegisterFunction(MultiFileReader::CreateFunctionSet(meta_fun));
++	loader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(meta_fun)));
+ 
+ 	// parquet_schema
+ 	ParquetSchemaFunction schema_fun;
+-	loader.RegisterFunction(MultiFileReader::CreateFunctionSet(schema_fun));
++	loader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(schema_fun)));
+ 
+ 	// parquet_key_value_metadata
+ 	ParquetKeyValueMetadataFunction kv_meta_fun;
+-	loader.RegisterFunction(MultiFileReader::CreateFunctionSet(kv_meta_fun));
++	loader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(kv_meta_fun)));
+ 
+ 	// parquet_file_metadata
+ 	ParquetFileMetadataFunction file_meta_fun;
+-	loader.RegisterFunction(MultiFileReader::CreateFunctionSet(file_meta_fun));
++	loader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(file_meta_fun)));
+ 
+ 	// parquet_bloom_probe
+ 	ParquetBloomProbeFunction bloom_probe_fun;
+-	loader.RegisterFunction(MultiFileReader::CreateFunctionSet(bloom_probe_fun));
++	loader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(bloom_probe_fun)));
+ 
+ 	// parquet_full_metadata
+ 	ParquetFullMetadataFunction full_meta_fun;
+-	loader.RegisterFunction(MultiFileReader::CreateFunctionSet(full_meta_fun));
+-
+-	// variant_to_parquet_variant
+-	loader.RegisterFunction(VariantColumnWriter::GetTransformFunction());
+-
+-	// bytes_to_variant
+-	loader.RegisterFunction(VariantColumnWriter::GetBytesToVariantFunction());
++	loader.RegisterFunction(renamed(MultiFileReader::CreateFunctionSet(full_meta_fun)));
+ 
+-	CopyFunction function("parquet");
++	CopyFunction function("tparquet");
+ 	function.copy_to_select = ParquetWriteSelect;
+ 	function.copy_to_bind = ParquetWriteBind;
+ 	function.copy_to_propagate_statistics = ParquetCopyToPropagateStatistics;
+@@ -1123,14 +1135,13 @@ static void LoadInternal(ExtensionLoader &loader) {
+ 	loader.RegisterFunction(function);
+ 
+ 	// parquet_key
+-	auto parquet_key_fun = PragmaFunction::PragmaCall("add_parquet_key", ParquetCrypto::AddKey,
++	auto parquet_key_fun = PragmaFunction::PragmaCall("add_tparquet_key", ParquetCrypto::AddKey,
+ 	                                                  FunctionSignature()
+ 	                                                      .AddPositionalOnly("key_name", LogicalType::VARCHAR)
+ 	                                                      .AddPositionalOnly("key", LogicalType::VARCHAR));
+ 	loader.RegisterFunction(parquet_key_fun);
+ 
+ 	auto &config = DBConfig::GetConfig(db_instance);
+-	config.replacement_scans.emplace_back(ParquetScanReplacement);
+ 	config.AddExtensionOption("binary_as_string", "In Parquet files, interpret binary data as a string.",
+ 	                          LogicalType::BOOLEAN, Value(false));
+ 	config.AddExtensionOption("disable_parquet_prefetching", "Disable the prefetching mechanism in Parquet",
+@@ -1173,7 +1184,7 @@ std::string ParquetExtension::Version() const {
+ 
+ extern "C" {
+ 
+-DUCKDB_CPP_EXTENSION_ENTRY(parquet, loader) { // NOLINT
++DUCKDB_CPP_EXTENSION_ENTRY(tparquet, loader) { // NOLINT
+ 	duckdb::LoadInternal(loader);
+ }
+ }
+diff --git a/extension/parquet/parquet_writer.cpp b/extension/parquet/parquet_writer.cpp
+index 3d0700e..f68332b 100644
+--- a/extension/parquet/parquet_writer.cpp
++++ b/extension/parquet/parquet_writer.cpp
+@@ -549,6 +549,14 @@ ParquetWriter::ParquetWriter(ClientContext &context, FileSystem &fs, ParquetWrit
+ 		file_meta_data.__isset.key_value_metadata = true;
+ 	}
+ 
++	if (options.codec == duckdb_parquet::CompressionCodec::PCODEC) { // tparquet: spec/FORMAT.md section 2
++		duckdb_parquet::KeyValue kv;
++		kv.__set_key("parquet.pcodec.version");
++		kv.__set_value("1");
++		file_meta_data.key_value_metadata.push_back(std::move(kv));
++		file_meta_data.__isset.key_value_metadata = true;
++	}
++
+ 	if (options.enable_bloom_filters) {
+ 		for (const auto &type : options.sql_types) {
+ 			if (!TypeVisitor::Contains(type, LogicalTypeId::INTERVAL)) {
+diff --git a/extension/parquet/writer/primitive_column_writer.cpp b/extension/parquet/writer/primitive_column_writer.cpp
+index 7d95a70..fd06f0c 100644
+--- a/extension/parquet/writer/primitive_column_writer.cpp
++++ b/extension/parquet/writer/primitive_column_writer.cpp
+@@ -85,7 +85,7 @@ unique_ptr<ColumnWriterState> PrimitiveColumnWriter::InitializeWriteState(duckdb
+ void PrimitiveColumnWriter::RegisterToRowGroup(duckdb_parquet::RowGroup &row_group) {
+ 	duckdb_parquet::ColumnChunk column_chunk;
+ 	column_chunk.__isset.meta_data = true;
+-	column_chunk.meta_data.codec = writer.GetCodec();
++	column_chunk.meta_data.codec = writer.GetCodec(SchemaIndex());
+ 	column_chunk.meta_data.path_in_schema = IdentifiersToStrings(schema_path);
+ 	column_chunk.meta_data.num_values = 0;
+ 	column_chunk.meta_data.type = writer.GetType(SchemaIndex());
+diff --git a/third_party/parquet/parquet_types.cpp b/third_party/parquet/parquet_types.cpp
+index cc73b3a..77e3699 100644
+--- a/third_party/parquet/parquet_types.cpp
++++ b/third_party/parquet/parquet_types.cpp
+@@ -580,7 +580,8 @@ int _kCompressionCodecValues[] = {
+   CompressionCodec::BROTLI,
+   CompressionCodec::LZ4,
+   CompressionCodec::ZSTD,
+-  CompressionCodec::LZ4_RAW
++  CompressionCodec::LZ4_RAW,
++  CompressionCodec::PCODEC
+ };
+ const char* _kCompressionCodecNames[] = {
+   "UNCOMPRESSED",
+@@ -590,9 +591,10 @@ const char* _kCompressionCodecNames[] = {
+   "BROTLI",
+   "LZ4",
+   "ZSTD",
+-  "LZ4_RAW"
++  "LZ4_RAW",
++  "PCODEC"
+ };
+-const std::map<int, const char*> _CompressionCodec_VALUES_TO_NAMES(::apache::thrift::TEnumIterator(8, _kCompressionCodecValues, _kCompressionCodecNames), ::apache::thrift::TEnumIterator(-1, nullptr, nullptr));
++const std::map<int, const char*> _CompressionCodec_VALUES_TO_NAMES(::apache::thrift::TEnumIterator(9, _kCompressionCodecValues, _kCompressionCodecNames), ::apache::thrift::TEnumIterator(-1, nullptr, nullptr));
+ 
+ std::ostream& operator<<(std::ostream& out, const CompressionCodec::type& val) {
+   std::map<int, const char*>::const_iterator it = _CompressionCodec_VALUES_TO_NAMES.find(val);
+diff --git a/third_party/parquet/parquet_types.h b/third_party/parquet/parquet_types.h
+index 77f709a..d13706e 100644
+--- a/third_party/parquet/parquet_types.h
++++ b/third_party/parquet/parquet_types.h
+@@ -333,7 +333,8 @@ struct CompressionCodec {
+     BROTLI = 4,
+     LZ4 = 5,
+     ZSTD = 6,
+-    LZ4_RAW = 7
++    LZ4_RAW = 7,
++    PCODEC = 20547 // tparquet: spec/FORMAT.md
+   };
+ };
+ 

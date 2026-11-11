@@ -39,6 +39,113 @@ index b38b46b7501c4e399f44deed6fd7c35b86cf6819..ca22b34d9d9b32b36b6471cb96db2ee5
  [dev-dependencies.proptest]
  version = "1.0"
  features = ["std"]
+diff --git upstream/src/arrow/array_reader/fixed_len_byte_array.rs fork/src/arrow/array_reader/fixed_len_byte_array.rs
+index c2efb1c5d656d0aa62843875e1c55c13737e9280..f2e6c8470ea251cc8ecf3877a9854c1c5e9d21c8 100644
+--- upstream/src/arrow/array_reader/fixed_len_byte_array.rs
++++ fork/src/arrow/array_reader/fixed_len_byte_array.rs
+@@ -29,10 +29,10 @@ use crate::errors::{ParquetError, Result};
+ use crate::schema::types::ColumnDescPtr;
+ use arrow_array::{
+     ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+-    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
+-    OffsetSizeTrait,
++    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
++    IntervalYearMonthArray, OffsetSizeTrait,
+ };
+-use arrow_buffer::{Buffer, IntervalDayTime, i256};
++use arrow_buffer::{Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
+ use arrow_data::ArrayDataBuilder;
+ use arrow_schema::{DataType as ArrowType, IntervalUnit};
+ use bytes::Bytes;
+@@ -245,7 +245,15 @@ impl ArrayReader for FixedLenByteArrayReader {
+                         Arc::new(IntervalDayTimeArray::from_unary(&binary, f)) as ArrayRef
+                     }
+                     IntervalUnit::MonthDayNano => {
+-                        return Err(nyi_err!("MonthDayNano intervals not supported"));
++                        // all three fields; the milliseconds are unsigned, as the spec says
++                        let f = |b: &[u8]| {
++                            IntervalMonthDayNano::new(
++                                i32::from_le_bytes(b[0..4].try_into().unwrap()),
++                                i32::from_le_bytes(b[4..8].try_into().unwrap()),
++                                u32::from_le_bytes(b[8..12].try_into().unwrap()) as i64 * 1_000_000,
++                            )
++                        };
++                        Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f)) as ArrayRef
+                     }
+                 }
+             }
+@@ -616,6 +624,71 @@ mod tests {
+     use bytes::Bytes;
+     use std::sync::Arc;
+ 
++    #[test]
++    fn test_interval_month_day_nano() {
++        use crate::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
++        use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
++        use crate::file::writer::SerializedFileWriter;
++        use crate::schema::parser::parse_message_type;
++        use arrow_array::IntervalMonthDayNanoArray;
++        use arrow_buffer::IntervalMonthDayNano;
++        use arrow_schema::Schema;
++
++        // an INTERVAL column as other writers store it: months, days and milliseconds, each
++        // an unsigned little-endian u32 (LogicalTypes.md), all three in use
++        let schema = "message s { optional fixed_len_byte_array(12) v (INTERVAL); }";
++        let schema = Arc::new(parse_message_type(schema).unwrap());
++        let raw = |months: u32, days: u32, millis: u32| {
++            let bytes = [
++                months.to_le_bytes(),
++                days.to_le_bytes(),
++                millis.to_le_bytes(),
++            ]
++            .concat();
++            FixedLenByteArray::from(bytes)
++        };
++        let mut file = vec![];
++        let mut writer = SerializedFileWriter::new(&mut file, schema, Default::default()).unwrap();
++        let mut row_group = writer.next_row_group().unwrap();
++        let mut column = row_group.next_column().unwrap().unwrap();
++        let values = [raw(14, 3, 14_706_789), raw(0, 0, 3_600_000_000)];
++        column
++            .typed::<FixedLenByteArrayType>()
++            .write_batch(&values, Some(&[1, 0, 1]), None)
++            .unwrap();
++        column.close().unwrap();
++        row_group.close().unwrap();
++        writer.close().unwrap();
++        let file = Bytes::from(file);
++
++        let hint = Schema::new(vec![Field::new(
++            "v",
++            ArrowType::Interval(IntervalUnit::MonthDayNano),
++            true,
++        )]);
++        let options = ArrowReaderOptions::new().with_schema(Arc::new(hint));
++        let mut reader =
++            ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options)
++                .unwrap()
++                .build()
++                .unwrap();
++        let batch = reader.next().unwrap().unwrap();
++        let expected = IntervalMonthDayNanoArray::from(vec![
++            Some(IntervalMonthDayNano::new(14, 3, 14_706_789_000_000)),
++            None,
++            Some(IntervalMonthDayNano::new(0, 0, 3_600_000_000_000_000)),
++        ]);
++        assert_eq!(batch.column(0).as_ref(), &expected as &dyn Array);
++
++        // without the hint the column stays DayTime, as upstream reads it
++        let mut reader = ParquetRecordBatchReader::try_new(file, 1024).unwrap();
++        let batch = reader.next().unwrap().unwrap();
++        assert_eq!(
++            batch.column(0).data_type(),
++            &ArrowType::Interval(IntervalUnit::DayTime)
++        );
++    }
++
+     #[test]
+     fn test_pending_reservation_tracks_max_capacity() {
+         let mut buffer = FixedLenByteArrayBuffer::with_capacity(0);
 diff --git upstream/src/basic.rs fork/src/basic.rs
 index 95babaf018b8a1cfdff3649380715404b6209735..8144c71d404eda96b51a2283d1f63c2265f6721f 100644
 --- upstream/src/basic.rs
@@ -221,7 +328,7 @@ index 923f0a4599f78c709576de1e0bc27b8d0bb05ea6..3cc994fcfce4bf0e30e165544085d7f3
      fn test_column_writer_v2_compression_ratio_threshold() {
          fn write_v2_page(threshold: f64) -> bool {
 diff --git upstream/src/compression.rs fork/src/compression.rs
-index d5d8d7cb3b93fbf046a7f266c84be38eca25b925..6395de3489443d22ad3446af2e2042adfdd6d724 100644
+index d5d8d7cb3b93fbf046a7f266c84be38eca25b925..0a4eb850bff9fd39701349f26f533e55b8eb43a4 100644
 --- upstream/src/compression.rs
 +++ fork/src/compression.rs
 @@ -50,6 +50,7 @@ assert_eq!(output, data);
@@ -358,9 +465,9 @@ index d5d8d7cb3b93fbf046a7f266c84be38eca25b925..6395de3489443d22ad3446af2e2042ad
 +                    "PcodecCodec unsupported without uncompress_size".into(),
 +                ));
 +            };
-+            let offset = output_buf.len();
-+            output_buf.resize(offset + required_len, 0);
-+            tparquet_core::decompress_into(input_buf, &mut output_buf[offset..])
++            // required_len comes from the page header: decompress_append allocates and
++            // writes only what the payload shows it can produce
++            tparquet_core::decompress_append(input_buf, output_buf, required_len)
 +                .map_err(|e| ParquetError::External(Box::new(e)))?;
 +            Ok(required_len)
 +        }
@@ -408,7 +515,7 @@ index d5d8d7cb3b93fbf046a7f266c84be38eca25b925..6395de3489443d22ad3446af2e2042ad
  #[cfg(any(feature = "lz4", test))]
  mod lz4_raw_codec {
      use crate::compression::Codec;
-@@ -973,4 +1089,84 @@ mod tests {
+@@ -973,4 +1089,118 @@ mod tests {
      fn test_codec_lz4_raw() {
          test_codec_with_size(CodecType::LZ4_RAW);
      }
@@ -484,6 +591,40 @@ index d5d8d7cb3b93fbf046a7f266c84be38eca25b925..6395de3489443d22ad3446af2e2042ad
 +    }
 +
 +    #[test]
++    fn test_codec_pcodec_untrusted_size() {
++        // uncompress_size comes from the page header: a payload of a few bytes claiming 2 GiB
++        // is refused before the output grows to the claim
++        let options = CodecOptionsBuilder::default().build();
++        let mut codec = create_codec(CodecType::PCODEC(Default::default()), &options)
++            .unwrap()
++            .unwrap();
++        let claim = i32::MAX as usize;
++        let payloads: [&[u8]; 3] = [
++            &[1, 0, 7],
++            &[1, 1, 2, 0xff],
++            &[1, 3, 0x28, 0xB5, 0x2F, 0xFD],
++        ];
++        for payload in payloads {
++            let mut output = vec![5];
++            let err = codec
++                .decompress(payload, &mut output, Some(claim))
++                .unwrap_err();
++            assert!(err.to_string().contains("pcodec payload"), "{err}");
++            assert!(output.capacity() < 1 << 20, "{}", output.capacity());
++            assert_eq!(output, [5]);
++        }
++        // and a valid payload is appended after what the output holds
++        let mut compressed = vec![];
++        codec.compress(b"page", &mut compressed).unwrap();
++        let mut output = vec![5];
++        assert_eq!(
++            codec.decompress(&compressed, &mut output, Some(4)).unwrap(),
++            4
++        );
++        assert_eq!(output, b"\x05page");
++    }
++
++    #[test]
 +    fn test_codec_options_physical_type() {
 +        use crate::basic::Type;
 +        assert_eq!(CodecOptions::default().physical_type, None);
@@ -494,7 +635,7 @@ index d5d8d7cb3b93fbf046a7f266c84be38eca25b925..6395de3489443d22ad3446af2e2042ad
 +    }
  }
 diff --git upstream/src/file/writer.rs fork/src/file/writer.rs
-index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..add917d728280c841e65e8f7360f18639b41ef68 100644
+index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..66528ed8427e3fc912a9a4021850c07c681d95d5 100644
 --- upstream/src/file/writer.rs
 +++ fork/src/file/writer.rs
 @@ -353,6 +353,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
@@ -510,8 +651,9 @@ index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..add917d728280c841e65e8f7360f1863
      }
  }
  
-+/// tparquet fork: adds `parquet.pcodec.version = "1"` to the key-value metadata of a
-+/// file with PCODEC column chunks, unless it is already there (spec/FORMAT.md section 2)
++/// tparquet fork: the key-value metadata with `parquet.pcodec.version = "1"` once if the
++/// file has PCODEC column chunks, and without the key otherwise (spec/FORMAT.md section 2);
++/// pairs with that key given by the caller are dropped
 +#[cfg(any(feature = "pcodec", test))]
 +fn with_pcodec_version(
 +    row_groups: &[RowGroupMetaData],
@@ -521,11 +663,10 @@ index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..add917d728280c841e65e8f7360f1863
 +        .iter()
 +        .flat_map(|rg| rg.columns())
 +        .any(|c| matches!(c.compression(), crate::basic::Compression::PCODEC(_)));
-+    let has_version = key_value_metadata
-+        .iter()
-+        .flatten()
-+        .any(|kv| kv.key == tparquet_core::KV_KEY);
-+    if has_pcodec && !has_version {
++    if let Some(kv) = key_value_metadata.as_mut() {
++        kv.retain(|kv| kv.key != tparquet_core::KV_KEY);
++    }
++    if has_pcodec {
 +        key_value_metadata
 +            .get_or_insert_default()
 +            .push(KeyValue::new(
@@ -539,7 +680,7 @@ index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..add917d728280c841e65e8f7360f1863
  /// Serialize all the bloom filters of the given row group to the given buffer,
  /// and returns the updated row group metadata.
  fn write_bloom_filters<W: Write + Send>(
-@@ -2026,6 +2054,139 @@ mod tests {
+@@ -2026,6 +2054,166 @@ mod tests {
          test_kv_metadata(None, Some(vec![]));
      }
  
@@ -662,7 +803,7 @@ index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..add917d728280c841e65e8f7360f1863
 +        );
 +        assert_eq!(
 +            pcodec_kv_metadata(pcodec, 1, None, vec![version.clone()]),
-+            Some(vec![version])
++            Some(vec![version.clone()])
 +        );
 +        // no PCODEC column chunk: no marker
 +        assert_eq!(pcodec_kv_metadata(pcodec, 0, None, vec![]), None);
@@ -672,7 +813,34 @@ index 7030cb28c6715f80b0e29f9f5961b718edce7cb1..add917d728280c841e65e8f7360f1863
 +        );
 +        assert_eq!(
 +            pcodec_kv_metadata(Compression::SNAPPY, 1, Some(vec![kv1.clone()]), vec![]),
++            Some(vec![kv1.clone()])
++        );
++        // the writer owns the key: a stale value is replaced, once, and a file without
++        // PCODEC column chunks does not keep one
++        let stale = KeyValue::new("parquet.pcodec.version".to_string(), "7".to_string());
++        let unset = KeyValue::new("parquet.pcodec.version".to_string(), None);
++        assert_eq!(
++            pcodec_kv_metadata(
++                pcodec,
++                1,
++                Some(vec![stale.clone(), kv1.clone(), version.clone()]),
++                vec![unset.clone()]
++            ),
++            Some(vec![kv1.clone(), version.clone()])
++        );
++        assert_eq!(
++            pcodec_kv_metadata(
++                Compression::SNAPPY,
++                1,
++                Some(vec![version.clone(), kv1.clone()]),
++                vec![stale.clone()]
++            ),
 +            Some(vec![kv1])
++        );
++        // (an empty list stays a list, as upstream writes one given by the caller)
++        assert_eq!(
++            pcodec_kv_metadata(pcodec, 0, Some(vec![version]), vec![stale]),
++            Some(vec![])
 +        );
 +    }
 +

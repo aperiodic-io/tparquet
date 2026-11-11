@@ -58,6 +58,9 @@
       "description": "INT32, INT64, FLOAT, DOUBLE, required, PCODEC",
       "expected": "expected/primitives_required.jsonl",
       "file": "files/primitives_required.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "primitives_required",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -121,6 +124,9 @@
       "description": "INT32, INT64, FLOAT, DOUBLE with nulls, PCODEC",
       "expected": "expected/primitives_optional.jsonl",
       "file": "files/primitives_optional.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "primitives_optional",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -158,6 +164,9 @@
       "description": "list<int64> and list<double> with null lists, empty lists and null items, PCODEC",
       "expected": "expected/lists.jsonl",
       "file": "files/lists.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "lists",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -234,6 +243,9 @@
       "description": "struct<id int32, quote struct<bid, ask double, size int64>, tags list<int32>>, PCODEC",
       "expected": "expected/nested_struct.jsonl",
       "file": "files/nested_struct.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "nested_struct",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -349,6 +361,9 @@
       "description": "timestamps (ms, us, ns; UTC, none, America/New_York), date32, time64, decimals in INT64 and INT32, PCODEC",
       "expected": "expected/temporal.jsonl",
       "file": "files/temporal.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "temporal",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -425,6 +440,9 @@
       "description": "decimal-valued doubles and floats (prices, 1e-8 amounts), some off the grid; DECIMAL payloads",
       "expected": "expected/decimal_floats.jsonl",
       "file": "files/decimal_floats.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "decimal_floats",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -475,6 +493,9 @@
       "description": "NaN payloads (quiet, signalling, negative), +-0, +-inf, subnormals, extremes",
       "expected": "expected/float_specials.jsonl",
       "file": "files/float_specials.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "float_specials",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -486,12 +507,8 @@
           "codecs": [
             "PCODEC"
           ],
-          "modes": {
-            "EMPTY": 1
-          },
-          "pages": {
-            "DICTIONARY_PAGE": 1
-          },
+          "modes": {},
+          "pages": {},
           "path": "i32",
           "physical_type": "INT32"
         },
@@ -499,12 +516,8 @@
           "codecs": [
             "PCODEC"
           ],
-          "modes": {
-            "EMPTY": 1
-          },
-          "pages": {
-            "DICTIONARY_PAGE": 1
-          },
+          "modes": {},
+          "pages": {},
           "path": "i64",
           "physical_type": "INT64"
         },
@@ -512,12 +525,8 @@
           "codecs": [
             "PCODEC"
           ],
-          "modes": {
-            "EMPTY": 1
-          },
-          "pages": {
-            "DICTIONARY_PAGE": 1
-          },
+          "modes": {},
+          "pages": {},
           "path": "f32",
           "physical_type": "FLOAT"
         },
@@ -525,12 +534,8 @@
           "codecs": [
             "PCODEC"
           ],
-          "modes": {
-            "EMPTY": 1
-          },
-          "pages": {
-            "DICTIONARY_PAGE": 1
-          },
+          "modes": {},
+          "pages": {},
           "path": "f64",
           "physical_type": "DOUBLE"
         }
@@ -538,6 +543,9 @@
       "description": "a row group with 0 rows and PCODEC column chunks without pages",
       "expected": "expected/empty.jsonl",
       "file": "files/empty.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "empty",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -635,6 +643,9 @@
       "description": "5 row groups of 400 rows, Auto policy",
       "expected": "expected/multiple_row_groups.jsonl",
       "file": "files/multiple_row_groups.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "multiple_row_groups",
       "pcodec_version": "1",
       "row_groups": 5,
@@ -721,6 +732,9 @@
       "description": "PCODEC with DATA_PAGE (V1) pages and dictionary pages; RAW, PCO, DECIMAL and ZSTD payloads",
       "expected": "expected/pages_v1.jsonl",
       "file": "files/pages_v1.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "pages_v1",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -797,6 +811,9 @@
       "description": "PCODEC with DATA_PAGE_V2 pages, PLAIN, several pages per chunk, a V2 page stored uncompressed",
       "expected": "expected/pages_v2.jsonl",
       "file": "files/pages_v2.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "pages_v2",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -894,6 +911,9 @@
       "description": "trades: PCODEC numeric columns next to dictionary-encoded ZSTD strings and booleans (Auto)",
       "expected": "expected/mixed.jsonl",
       "file": "files/mixed.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
       "name": "mixed",
       "pcodec_version": "1",
       "row_groups": 1,
@@ -988,10 +1008,893 @@
       "description": "control: the mixed table as standard Parquet (ZSTD level 3, no PCODEC)",
       "expected": "expected/standard_control.jsonl",
       "file": "files/standard_control.parquet",
+      "key_value_metadata": {},
       "name": "standard_control",
       "pcodec_version": null,
       "row_groups": 1,
       "rows": 1500
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "by_id.entries.key",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "by_id.entries.value",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "ZSTD"
+          ],
+          "modes": {},
+          "pages": {
+            "DATA_PAGE_V2": 1,
+            "DICTIONARY_PAGE": 1
+          },
+          "path": "by_tag.entries.key",
+          "physical_type": "BYTE_ARRAY"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "by_tag.entries.value",
+          "physical_type": "INT64"
+        }
+      ],
+      "description": "map<int32, double> and map<string, int64> with null maps, empty maps and null values, PCODEC",
+      "expected": "expected/maps.jsonl",
+      "file": "files/maps.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "maps",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 1000
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "legs.list.item.id",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "legs.list.item.pts.list.item.x",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "legs.list.item.pts.list.item.y",
+          "physical_type": "INT32"
+        }
+      ],
+      "description": "list<struct<id int64, pts list<struct<x double, y int32>>>> with nulls and empty lists at every level, PCODEC",
+      "expected": "expected/deep_nesting.jsonl",
+      "file": "files/deep_nesting.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "deep_nesting",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 600
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 5,
+            "UNCOMPRESSED": 3
+          },
+          "pages": {
+            "DATA_PAGE_V2": 7,
+            "DICTIONARY_PAGE": 1
+          },
+          "path": "id",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 5,
+            "RAW": 3
+          },
+          "pages": {
+            "DATA_PAGE_V2": 7,
+            "DICTIONARY_PAGE": 1
+          },
+          "path": "px",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 6,
+            "RAW": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 6,
+            "DICTIONARY_PAGE": 1
+          },
+          "path": "small",
+          "physical_type": "INT32"
+        }
+      ],
+      "description": "dictionary-encoded PCODEC columns whose dictionary outgrows its limit: RLE_DICTIONARY then PLAIN pages in one chunk",
+      "expected": "expected/dictionary_fallback.jsonl",
+      "file": "files/dictionary_fallback.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "dictionary_fallback",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 2400
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level0",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level1",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level2",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level3",
+          "physical_type": "FLOAT"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level4",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level5",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level6",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level7",
+          "physical_type": "FLOAT"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level8",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level9",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level10",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level11",
+          "physical_type": "FLOAT"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level12",
+          "physical_type": "INT64"
+        }
+      ],
+      "description": "one PCODEC column per pcodec level 0 to 12 (INT64, DOUBLE, INT32, FLOAT in turn)",
+      "expected": "expected/pcodec_levels.jsonl",
+      "file": "files/pcodec_levels.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "pcodec_levels",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 800
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "RAW": 1
+          },
+          "pages": {
+            "DATA_PAGE": 1
+          },
+          "path": "raw",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE": 1
+          },
+          "path": "pco",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE": 1
+          },
+          "path": "decimal",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "ZSTD": 1
+          },
+          "pages": {
+            "DATA_PAGE": 1
+          },
+          "path": "zstd",
+          "physical_type": "BYTE_ARRAY"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "ZSTD": 1
+          },
+          "pages": {
+            "DATA_PAGE": 1
+          },
+          "path": "zstd_levels",
+          "physical_type": "INT64"
+        }
+      ],
+      "description": "one column per payload mode side by side, DATA_PAGE (V1) pages: RAW, PCO, DECIMAL, ZSTD (strings; levels before INT64 values)",
+      "expected": "expected/payload_modes.jsonl",
+      "file": "files/payload_modes.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "payload_modes",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 1000
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "i8",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "i16",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "UNCOMPRESSED": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "i32",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "u8",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "u16",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "u32",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "u64",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "UNCOMPRESSED": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "i64",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "dec1_0",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "dec9_9",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "dec10_2",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "dec18_0",
+          "physical_type": "INT64"
+        }
+      ],
+      "description": "int8, int16, int32, uint8, uint16, uint32 in INT32; uint64, int64 in INT64, at their extremes; decimals at the precision bounds of INT32 and INT64, PCODEC",
+      "expected": "expected/integer_types.jsonl",
+      "file": "files/integer_types.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "integer_types",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 400
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "ts",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "ZSTD"
+          ],
+          "modes": {},
+          "pages": {
+            "DATA_PAGE_V2": 1,
+            "DICTIONARY_PAGE": 1
+          },
+          "path": "regime",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "level",
+          "physical_type": "DOUBLE"
+        }
+      ],
+      "description": "Auto: PCODEC for the timestamps and the decimal doubles, the base codec (ZSTD) for an INT64 column of three values in long runs",
+      "expected": "expected/auto_choice.jsonl",
+      "file": "files/auto_choice.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "auto_choice",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 3000
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "digits.list.item",
+          "physical_type": "INT32"
+        }
+      ],
+      "description": "one DATA_PAGE_V2 page of 270000 INT32 values in 3 rows of a list: a payload of two pcodec chunks",
+      "expected": "expected/large_page.jsonl",
+      "file": "files/large_page.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "large_page",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 3
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 5
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5
+          },
+          "path": "i32",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 5
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5
+          },
+          "path": "i64",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 5
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5
+          },
+          "path": "f32",
+          "physical_type": "FLOAT"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 5
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5
+          },
+          "path": "f64",
+          "physical_type": "DOUBLE"
+        }
+      ],
+      "description": "PCODEC with page statistics in the column index and the page headers, offset index, bloom filters and sorting columns",
+      "expected": "expected/statistics.jsonl",
+      "file": "files/statistics.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "statistics",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 1500
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "EMPTY": 3,
+            "PCO": 2
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5
+          },
+          "path": "sparse",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1,
+            "EMPTY": 3,
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5
+          },
+          "path": "tail",
+          "physical_type": "DOUBLE"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "EMPTY": 1,
+            "RAW": 5
+          },
+          "pages": {
+            "DATA_PAGE_V2": 5,
+            "DICTIONARY_PAGE": 1
+          },
+          "path": "none",
+          "physical_type": "INT32"
+        }
+      ],
+      "description": "PCODEC pages whose values are all null (V2 values sections of expected size 0, EMPTY), and a column without values with an empty dictionary page",
+      "expected": "expected/all_null_pages.jsonl",
+      "file": "files/all_null_pages.parquet",
+      "key_value_metadata": {
+        "parquet.pcodec.version": "1"
+      },
+      "name": "all_null_pages",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 1000
+    },
+    {
+      "columns": [
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "i32",
+          "physical_type": "INT32"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "PCO": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "i64",
+          "physical_type": "INT64"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "f32",
+          "physical_type": "FLOAT"
+        },
+        {
+          "codecs": [
+            "PCODEC"
+          ],
+          "modes": {
+            "DECIMAL": 1
+          },
+          "pages": {
+            "DATA_PAGE_V2": 1
+          },
+          "path": "f64",
+          "physical_type": "DOUBLE"
+        }
+      ],
+      "description": "key-value pairs of the writer's caller in the footer, next to parquet.pcodec.version (a stale value given by the caller replaced)",
+      "expected": "expected/key_value_metadata.jsonl",
+      "file": "files/key_value_metadata.parquet",
+      "key_value_metadata": {
+        "empty": "",
+        "no.value": null,
+        "origin": "synthetic test data",
+        "parquet.pcodec.version": "1",
+        "schema.note": "prix en €, ünïcode \"quoted\"\n"
+      },
+      "name": "key_value_metadata",
+      "pcodec_version": "1",
+      "row_groups": 1,
+      "rows": 500
     }
   ]
 }

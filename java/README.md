@@ -75,9 +75,13 @@ spark.read.parquet("trades")                                     # or .format("t
 spark.sql("CREATE TABLE trades USING tparquet LOCATION 'trades'")
 ```
 
-Write options: `level`, `decimal`, `rowGroupSize`, `pageSize`, `outputTimestampType` (default
-`TIMESTAMP_MICROS`: Spark's Parquet source writes INT96, which PCODEC does not model).
-`compression` may only be `pcodec`.
+Write options: `level`, `decimal`, `rowGroupSize`, `pageSize`, `outputTimestampType` (`INT96`,
+`TIMESTAMP_MICROS` or `TIMESTAMP_MILLIS`). `compression` may only be `pcodec`. Timestamps are
+written as `format("parquet")` writes them: the session's `spark.sql.parquet.outputTimestampType`
+(Spark's default is INT96), with Spark's INT96 rebase (`spark.sql.parquet.int96RebaseModeInWrite`),
+unless the `outputTimestampType` option overrides it. PCODEC does not model INT96, so INT96 columns
+are the payload's ZSTD fallback; `outputTimestampType=TIMESTAMP_MICROS` (or the session setting)
+writes INT64 timestamps, which PCODEC compresses.
 
 ## Testing
 
@@ -94,7 +98,9 @@ make -C java vectors ARGS="check ../testdata"
 - **Conformance:** every vector of `testdata/` read through the fork gives exactly its expected
   rows (`java/tparquet`, `ConformanceTest`); the payload vectors decode (or fail) as listed, and
   re-encode to the same bytes (`tparquet-jni`); Spark reads every vector, with each of its
-  readers, exactly as a standard copy of the same rows (`tparquet-spark`).
+  readers, exactly as a standard copy of the same rows (`tparquet-spark`). Spark's vectorized
+  readers refuse any file whose footer has a key without a value, whatever its codec
+  (`key_value_metadata`): there the PCODEC file fails as its standard copy does.
 - **Cross-language:** the Rust reference reader reads the vectors the Java writer writes, and the
   Java CLI reads everyone's (`acceptance/cross/run.sh`).
 - **Untrusted payloads:** the native methods check every range and buffer again, refuse aliasing

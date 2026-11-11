@@ -34,14 +34,14 @@ fn check_reads_every_vector_of_a_directory() {
     let out = check(&testdata());
     assert_eq!(
         (out.status.code(), text(&out.stdout), text(&out.stderr)),
-        (Some(0), "13 vectors match\n".into(), "".into())
+        (Some(0), "24 vectors match\n".into(), "".into())
     );
 
     // the vectors of another writer: files/ and expected/ only (no manifests needed)
     let dir = tempfile::tempdir().unwrap();
     copy_vectors(&testdata(), dir.path());
     std::fs::remove_file(dir.path().join("files/manifest.json")).unwrap();
-    assert_eq!(text(&check(dir.path()).stdout), "13 vectors match\n");
+    assert_eq!(text(&check(dir.path()).stdout), "24 vectors match\n");
 
     // a changed row is reported by vector and line (as acceptance/cross/run.sh tampers)
     let path = dir.path().join("expected/temporal.jsonl");
@@ -113,7 +113,7 @@ fn write_rewrites_every_vector_with_copy_stored_as_tparquet() {
     let o = run(&["write", out.to_str().unwrap(), testdata().to_str().unwrap()]);
     assert_eq!(
         (o.status.code(), text(&o.stdout), text(&o.stderr)),
-        (Some(0), "13 vectors written\n".into(), "".into())
+        (Some(0), "24 vectors written\n".into(), "".into())
     );
     let mut names: Vec<String> = std::fs::read_dir(out.join("files"))
         .unwrap()
@@ -133,7 +133,7 @@ fn write_rewrites_every_vector_with_copy_stored_as_tparquet() {
         }
     }
     let o = check(&out);
-    assert_eq!((o.status.code(), text(&o.stdout)), (Some(0), "13 vectors match\n".into()));
+    assert_eq!((o.status.code(), text(&o.stdout)), (Some(0), "24 vectors match\n".into()));
 
     // several sources: a name met twice keeps the last
     let second = dir.path().join("second");
@@ -145,8 +145,8 @@ fn write_rewrites_every_vector_with_copy_stored_as_tparquet() {
         }
     }
     let o = run(&["write", out.to_str().unwrap(), testdata().to_str().unwrap(), second.to_str().unwrap()]);
-    assert_eq!(text(&o.stdout), "14 vectors written\n");
-    assert_eq!(text(&check(&out).stdout), "13 vectors match\n");
+    assert_eq!(text(&o.stdout), "25 vectors written\n");
+    assert_eq!(text(&check(&out).stdout), "24 vectors match\n");
 }
 
 #[test]

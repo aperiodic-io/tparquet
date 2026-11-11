@@ -1,9 +1,11 @@
-"""The `tparquet` namespaces: DataFrame.tparquet.write and LazyFrame.tparquet.sink."""
+"""DataFrame.tparquet.write, and the registration of the `tparquet` namespaces."""
 
 from __future__ import annotations
 
 import io
+import os
 import pathlib
+import re
 from collections.abc import Callable
 
 import polars as pl
@@ -62,81 +64,85 @@ def test_write_to_a_file_object() -> None:
     assert_frame_equal(pt.read_tparquet(io.BytesIO(buf.getvalue())), ticks(100))
 
 
-def test_sink_streams_the_query_into_one_file(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    sources = []
-    for i in range(3):
-        sources.append(tmp_path / f"in{i}.parquet")
-        ticks(2000, offset=2000 * i).tparquet.write(sources[-1], row_group_size=500)
-    lf = pt.scan_tparquet(sources).filter(pl.col("qty") > 5).with_columns(notional=pl.col("price") * pl.col("qty"))
-    want = lf.collect()
-
-    # sink never materializes the whole result
-    def no_collect(*args: object, **kwargs: object) -> None:
-        raise AssertionError("sink called LazyFrame.collect")
-
-    monkeypatch.setattr(pl.LazyFrame, "collect", no_collect)
-    codecs = lf.tparquet.sink(tmp_path / "out.parquet", chunk_size=1000, row_group_size=1000)
-    monkeypatch.undo()
-
-    assert codecs["notional"] == "PCODEC"
-    assert_frame_equal(pt.read_tparquet(tmp_path / "out.parquet"), want)
-    groups = tparquet.ParquetFile(tmp_path / "out.parquet").metadata.num_row_groups
-    assert groups == -(-want.height // 1000)
+def test_a_write_the_writer_rejects_leaves_no_file(tmp_path: pathlib.Path) -> None:
+    # the column names are checked only once the file is created
+    with pytest.raises(tparquet.PcodecError, match=r'^no column named "nope"$'):
+        ticks(10).tparquet.write(tmp_path / "t.parquet", columns={"nope": "pcodec"})
+    assert os.listdir(tmp_path) == []
 
 
-def test_sink_options_and_file_objects(tmp_path: pathlib.Path) -> None:
-    lf = ticks(3000).lazy()
-    assert set(lf.tparquet.sink(tmp_path / "b.parquet", policy="base").values()) == {"ZSTD"}
-    buf = io.BytesIO()
-    lf.tparquet.sink(buf, level=2, columns={"ts": "base"}, row_group_size=1000)
-    out = io.BytesIO(buf.getvalue())
-    assert_frame_equal(pt.read_tparquet(out), ticks(3000))
-    assert tparquet.ParquetFile(io.BytesIO(buf.getvalue())).metadata.num_row_groups == 3
+def test_a_failed_write_keeps_the_file_it_would_replace(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "t.parquet"
+    ticks(10).tparquet.write(path)
+    before = path.read_bytes()
+    with pytest.raises(tparquet.PcodecError):
+        ticks(20).tparquet.write(path, columns={"nope": "pcodec"})
+    assert path.read_bytes() == before
+    assert os.listdir(tmp_path) == ["t.parquet"]
 
 
-def test_sink_passes_every_option_to_the_writer(tmp_path: pathlib.Path) -> None:
-    lf = ticks(3000).lazy()
-    codecs = lf.tparquet.sink(tmp_path / "a.parquet", policy="pcodec", columns={"ts": "base"}, base="snappy")
-    assert codecs == {"ts": "SNAPPY", "price": "PCODEC", "qty": "PCODEC", "sym": "SNAPPY"}
-    with pytest.raises(tparquet.PcodecError, match="level"):
-        lf.tparquet.sink(tmp_path / "b.parquet", level=13)
+def test_write_replaces_a_file_once_complete(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "t.parquet"
+    ticks(10).tparquet.write(path)
+    before = path.read_bytes()
+    sinks: list[object] = []
+    write_table = tparquet.write_table
+
+    def recording(data: tparquet.ArrowData, sink: tparquet.Sink, **kwargs: object) -> dict[str, str]:
+        sinks.append(sink)
+        codecs = write_table(data, sink, **kwargs)  # type: ignore[arg-type]
+        assert path.read_bytes() == before  # still the old file
+        return codecs
+
+    monkeypatch.setattr(tparquet.polars, "write_table", recording)
+    ticks(20).tparquet.write(path)
+    (sink,) = sinks
+    assert isinstance(sink, str)
+    assert os.path.dirname(sink) == str(tmp_path)
+    assert re.fullmatch(r"\.t\.parquet\.[0-9a-f]{32}\.tmp", os.path.basename(sink))
+    assert os.listdir(tmp_path) == ["t.parquet"]
+    assert_frame_equal(pt.read_tparquet(path), ticks(20))
 
 
-def test_sink_batches_have_chunk_size_rows(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    heights: list[int] = []
-    write = tparquet.Writer.write
-
-    def recording(self: tparquet.Writer, data: pl.DataFrame) -> None:
-        heights.append(data.height)
-        write(self, data)
-
-    monkeypatch.setattr(tparquet.Writer, "write", recording)
-    ticks(1000).lazy().tparquet.sink(tmp_path / "a.parquet", chunk_size=300)
-    assert sum(heights) == 1000
-    assert max(heights) <= 300
-    heights.clear()
-    ticks(5).lazy().tparquet.sink(tmp_path / "b.parquet", chunk_size=1)
-    assert heights == [1, 1, 1, 1, 1]
+def test_write_through_a_symlink_writes_the_file_it_links_to(tmp_path: pathlib.Path) -> None:
+    real = tmp_path / "data" / "t.parquet"
+    real.parent.mkdir()
+    link = tmp_path / "link.parquet"
+    link.symlink_to(real)  # dangling until written
+    ticks(10).tparquet.write(link)
+    assert link.is_symlink()
+    assert_frame_equal(pt.read_tparquet(real), ticks(10))
 
 
-def test_sink_of_an_empty_result_writes_the_schema(tmp_path: pathlib.Path) -> None:
-    lf = ticks(100).lazy().filter(pl.col("ts") < 0)
-    lf.tparquet.sink(tmp_path / "empty.parquet")
-    out = pt.read_tparquet(tmp_path / "empty.parquet")
-    assert out.height == 0
-    assert out.schema == ticks(1).schema
+def test_write_errors_name_the_path(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(FileNotFoundError, match=re.escape(str(tmp_path / "no"))) as e:
+        ticks(10).tparquet.write(tmp_path / "no" / "t.parquet")
+    assert ".tmp" not in str(e.value)
+    (tmp_path / "d").mkdir()
+    with pytest.raises(IsADirectoryError):
+        ticks(10).tparquet.write(tmp_path / "d")
+    assert sorted(os.listdir(tmp_path)) == ["d"]
 
 
-def test_a_failing_query_leaves_no_file(tmp_path: pathlib.Path) -> None:
-    def boom(df: pl.DataFrame) -> pl.DataFrame:
-        raise RuntimeError("boom")
+def test_an_object_column_is_refused(tmp_path: pathlib.Path) -> None:
+    """Polars exports an Object column's values as the addresses of the Python objects; its own
+    writer refuses the dtype, and so does this one."""
+    df = pl.DataFrame({"a": [1, 2], "o": pl.Series([object(), 3], dtype=pl.Object)})
+    message = r"^cannot write column 'o' of dtype Object: its values are Python objects$"
+    with pytest.raises(pl.exceptions.ComputeError, match=message):
+        df.tparquet.write(tmp_path / "t.parquet")
+    with pytest.raises(pl.exceptions.ComputeError, match=message):
+        df.tparquet.write(io.BytesIO())
+    with pytest.raises(pl.exceptions.ComputeError, match=message):
+        df.lazy().tparquet.sink(tmp_path / "t.parquet")
+    with pytest.raises(pl.exceptions.ComputeError, match=message):
+        df.lazy().tparquet.sink(io.BytesIO())
+    assert os.listdir(tmp_path) == []
+    # the other columns can be written
+    assert df.drop("o").tparquet.write(tmp_path / "t.parquet") == {"a": "PCODEC"}
 
-    lf = ticks(100).lazy().map_batches(boom, schema=ticks(1).schema)
-    with pytest.raises(RuntimeError, match="boom"):
-        lf.tparquet.sink(tmp_path / "out.parquet")
-    assert not (tmp_path / "out.parquet").exists()
 
-
-def test_bad_chunk_size(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match="chunk_size must be positive"):
-        ticks(10).lazy().tparquet.sink(tmp_path / "x.parquet", chunk_size=0)
+def test_write_to_a_file_name_that_is_not_utf_8(tmp_path: pathlib.Path) -> None:
+    raw = os.fsencode(tmp_path) + b"/caf\xe9.parquet"
+    ticks(3).tparquet.write(raw)
+    assert_frame_equal(pt.read_tparquet(raw), ticks(3))

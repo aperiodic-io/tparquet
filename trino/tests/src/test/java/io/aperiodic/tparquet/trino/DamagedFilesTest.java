@@ -48,7 +48,8 @@ class DamagedFilesTest
             throws IOException
     {
         dir = Files.createTempDirectory("tparquet-damaged");
-        vectors = Testdata.pcodecVectorNames().stream().map(name -> {
+        // but those Trino cannot open, whatever their codec (Testdata.trinoRefuses)
+        vectors = Testdata.pcodecVectorNames().stream().filter(name -> !Testdata.trinoRefuses(name)).map(name -> {
             try {
                 Path f = Testdata.file(name);
                 return new Vector(name, f, Files.readAllBytes(f), Corrupt.payloads(f));

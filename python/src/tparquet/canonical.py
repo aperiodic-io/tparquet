@@ -2,8 +2,9 @@
 
 One compact JSON object per row: integers (and everything stored as an integer: timestamps,
 dates, times, durations, unscaled decimals) as plain numbers, floats as the hex of their IEEE
-bits, binary as base64, lists as arrays, structs as objects, maps as arrays of entry objects,
-dictionaries decoded. Two rows are equal exactly when their lines are equal byte for byte.
+bits, intervals as months, days and nanoseconds, binary as base64, lists as arrays, structs as
+objects, maps as arrays of entry objects, dictionaries and run-end encoded arrays decoded. Two
+rows are equal exactly when their lines are equal byte for byte.
 """
 
 from __future__ import annotations
@@ -43,6 +44,10 @@ def _stored_integer(t: Any, pa: Any) -> Any:
     return None
 
 
+def _interval(months: int, days: int, nanoseconds: int) -> str:
+    return f'{{"months":{months},"days":{days},"nanoseconds":{nanoseconds}}}'
+
+
 def _decimals(arr: Any) -> list[str]:
     width = arr.type.byte_width
     data = memoryview(arr.buffers()[1])
@@ -64,6 +69,10 @@ def _values(arr: Any, pa: Any) -> list[str]:
         return _values(arr.storage, pa)
     if pa.types.is_dictionary(t):
         return _values(arr.dictionary_decode(), pa)
+    if pa.types.is_run_end_encoded(t):
+        import pyarrow.compute as pc
+
+        return _values(pc.run_end_decode(arr), pa)  # type: ignore[attr-defined]  # not in pyarrow-stubs
     if pa.types.is_null(t):
         return ["null"] * len(arr)
     out = _non_null_values(arr, t, pa)
@@ -88,6 +97,10 @@ def _non_null_values(arr: Any, t: Any, pa: Any) -> list[str]:
         return [str(v) for v in arr.view(stored).to_pylist()]
     if pa.types.is_decimal(t):
         return _decimals(arr)
+    if pa.types.is_interval(t):
+        # month-day-nano: pyarrow has no array class for year-month and day-time intervals.
+        # `_values` replaces what a null gets here, so mutants of the (0, 0, 0) are equivalent
+        return [_interval(*(v or (0, 0, 0))) for v in arr.to_pylist()]  # pragma: no mutate
     if pa.types.is_string(t) or pa.types.is_large_string(t) or pa.types.is_string_view(t):
         return [_string(v or "") for v in arr.to_pylist()]
     if (
@@ -100,6 +113,9 @@ def _non_null_values(arr: Any, t: Any, pa: Any) -> list[str]:
     if pa.types.is_list(t) or pa.types.is_large_list(t) or pa.types.is_map(t):
         offsets = arr.offsets.to_pylist()
         return _join(_values(arr.values, pa), offsets[:-1], offsets[1:])
+    if pa.types.is_list_view(t) or pa.types.is_large_list_view(t):
+        starts = arr.offsets.to_pylist()
+        return _join(_values(arr.values, pa), starts, [s + n for s, n in zip(starts, arr.sizes.to_pylist())])
     if pa.types.is_fixed_size_list(t):
         size = t.list_size
         starts = [(arr.offset + i) * size for i in range(len(arr))]

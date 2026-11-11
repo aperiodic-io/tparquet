@@ -493,8 +493,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 }
 
-/// tparquet fork: adds `parquet.pcodec.version = "1"` to the key-value metadata of a
-/// file with PCODEC column chunks, unless it is already there (spec/FORMAT.md section 2)
+/// tparquet fork: the key-value metadata with `parquet.pcodec.version = "1"` once if the
+/// file has PCODEC column chunks, and without the key otherwise (spec/FORMAT.md section 2);
+/// pairs with that key given by the caller are dropped
 #[cfg(any(feature = "pcodec", test))]
 fn with_pcodec_version(
     row_groups: &[RowGroupMetaData],
@@ -504,11 +505,10 @@ fn with_pcodec_version(
         .iter()
         .flat_map(|rg| rg.columns())
         .any(|c| matches!(c.compression(), crate::basic::Compression::PCODEC(_)));
-    let has_version = key_value_metadata
-        .iter()
-        .flatten()
-        .any(|kv| kv.key == tparquet_core::KV_KEY);
-    if has_pcodec && !has_version {
+    if let Some(kv) = key_value_metadata.as_mut() {
+        kv.retain(|kv| kv.key != tparquet_core::KV_KEY);
+    }
+    if has_pcodec {
         key_value_metadata
             .get_or_insert_default()
             .push(KeyValue::new(
@@ -2173,7 +2173,7 @@ mod tests {
         );
         assert_eq!(
             pcodec_kv_metadata(pcodec, 1, None, vec![version.clone()]),
-            Some(vec![version])
+            Some(vec![version.clone()])
         );
         // no PCODEC column chunk: no marker
         assert_eq!(pcodec_kv_metadata(pcodec, 0, None, vec![]), None);
@@ -2183,7 +2183,34 @@ mod tests {
         );
         assert_eq!(
             pcodec_kv_metadata(Compression::SNAPPY, 1, Some(vec![kv1.clone()]), vec![]),
+            Some(vec![kv1.clone()])
+        );
+        // the writer owns the key: a stale value is replaced, once, and a file without
+        // PCODEC column chunks does not keep one
+        let stale = KeyValue::new("parquet.pcodec.version".to_string(), "7".to_string());
+        let unset = KeyValue::new("parquet.pcodec.version".to_string(), None);
+        assert_eq!(
+            pcodec_kv_metadata(
+                pcodec,
+                1,
+                Some(vec![stale.clone(), kv1.clone(), version.clone()]),
+                vec![unset.clone()]
+            ),
+            Some(vec![kv1.clone(), version.clone()])
+        );
+        assert_eq!(
+            pcodec_kv_metadata(
+                Compression::SNAPPY,
+                1,
+                Some(vec![version.clone(), kv1.clone()]),
+                vec![stale.clone()]
+            ),
             Some(vec![kv1])
+        );
+        // (an empty list stays a list, as upstream writes one given by the caller)
+        assert_eq!(
+            pcodec_kv_metadata(pcodec, 0, Some(vec![version]), vec![stale]),
+            Some(vec![])
         );
     }
 

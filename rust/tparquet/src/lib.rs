@@ -21,7 +21,7 @@ pub use error::{Error, Result};
 pub use parquet;
 pub use policy::Policy;
 pub use transcode::{Target, transcode};
-pub use writer::{ColumnCodec, Writer, WriterOptions};
+pub use writer::{ColumnCodec, Writer, WriterOptions, parse_base};
 
 /// Reading Parquet files (PCODEC or not) as Arrow record batches.
 pub mod read {

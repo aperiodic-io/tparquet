@@ -3,7 +3,27 @@ name: python
 on:
   push:
     branches: [main]
+    paths:
+      - "python/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/python.yml"
   pull_request:
+    paths:
+      - "python/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/python.yml"
   schedule:
     - cron: "41 4 * * 2" # weekly: thorough property tests and every mutant
   workflow_dispatch:

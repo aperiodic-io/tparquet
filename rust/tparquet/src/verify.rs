@@ -63,6 +63,11 @@ fn lines<R: ChunkReader + 'static>(r: R) -> Result<(Schema, impl Iterator<Item =
     Ok((schema, lines))
 }
 
+/// `n` plus the rows left in `lines`; the first error ends the count (the reader repeats it).
+fn count(n: usize, mut lines: impl Iterator<Item = Result<String>>) -> Result<usize> {
+    lines.try_fold(n, |n, line| line.map(|_| n + 1))
+}
+
 /// Compares `a` and `b`: `None` when they hold the same data.
 pub fn verify<A: ChunkReader + 'static, B: ChunkReader + 'static>(a: A, b: B) -> Result<Option<Difference>> {
     let (sa, mut la) = lines(a)?;
@@ -76,8 +81,8 @@ pub fn verify<A: ChunkReader + 'static, B: ChunkReader + 'static>(a: A, b: B) ->
             (None, None) => return Ok(None),
             (Some(a), Some(b)) if a == b => row += 1,
             (Some(a), Some(b)) => return Ok(Some(Difference::Row { row, a, b })),
-            (Some(_), None) => return Ok(Some(Difference::RowCount { a: row + 1 + la.count(), b: row })),
-            (None, Some(_)) => return Ok(Some(Difference::RowCount { a: row, b: row + 1 + lb.count() })),
+            (Some(_), None) => return Ok(Some(Difference::RowCount { a: count(row + 1, la)?, b: row })),
+            (None, Some(_)) => return Ok(Some(Difference::RowCount { a: row, b: count(row + 1, lb)? })),
         }
     }
 }

@@ -94,7 +94,12 @@ make -C trino mutants       # PIT on the fork's code, every mutant killed
   read by trino-parquet into Trino pages gives exactly the rows of a standard (ZSTD) copy of the
   same rows (written by `java/tparquet`) read the same way, floats bit for bit, and exactly its
   expected rows (`testdata/expected`, canonical JSON of the Trino values), with Trino's types
-  for every column (timestamps of every unit and zone, dates, times, decimals, lists, structs).
+  for every column (timestamps of every unit and zone, dates, times, decimals, lists, structs,
+  maps). Two things Trino 484 does not do, whatever the codec, are tested as such, on the vector
+  and its standard copy alike: it reads `UINT_32` and `UINT_64` values as their bits taken as
+  signed (`integer_types`' `u32` and `u64`, left out of its Hive table), and it cannot open a
+  file whose footer has a key without a value (`key_value_metadata`, a `NullPointerException` in
+  `ParquetMetadata.keyValueMetaData`).
 - **End to end** (`TrinoQueriesTest`): Trino's query engine (`DistributedQueryRunner`) with the
   Hive connector, loaded from a plugin directory into which `install-tparquet.sh` installed the
   jars, the way the server loads plugins (`PluginManager.createClassLoader`); the file metastore

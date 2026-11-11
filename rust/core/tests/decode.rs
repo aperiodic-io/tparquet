@@ -3,7 +3,7 @@
 
 use pco::ChunkConfig;
 use pco::standalone::simple_compress;
-use tparquet_core::{Error, Mode, PhysicalType, decompress, decompress_into, mode_of};
+use tparquet_core::{Error, Mode, PhysicalType, decompress, decompress_append, decompress_into, mode_of};
 
 fn pco_i64(v: &[i64]) -> Vec<u8> {
     simple_compress(v, &ChunkConfig::default()).unwrap()
@@ -227,4 +227,23 @@ fn errors_display_and_types_map() {
     assert_eq!(tparquet_core::CODEC_ID, 20547);
     assert_eq!(tparquet_core::KV_KEY, "parquet.pcodec.version");
     assert_eq!(tparquet_core::KV_VALUE, "1");
+}
+
+#[test]
+fn decompress_append_appends_and_leaves_the_output_alone_on_an_error() {
+    let mut p = decimal(5, 1, &[1], &f64::NAN.to_le_bytes(), &[15, 0, 25]);
+    let want: Vec<u8> = [1.5, f64::NAN, 2.5].iter().flat_map(|x: &f64| x.to_le_bytes()).collect();
+    let mut out = vec![7, 7];
+    assert_eq!(decompress_append(&p, &mut out, 24), Ok(()));
+    assert_eq!(out[..2], [7, 7]);
+    assert_eq!(bits64(&out[2..]), bits64(&want));
+    for len in [16, 32] {
+        assert!(decompress_append(&p, &mut out, len).is_err(), "{len}");
+        assert_eq!(out.len(), 26, "{len}");
+    }
+    p.truncate(p.len() - 1);
+    assert!(decompress_append(&p, &mut out, 24).is_err());
+    assert_eq!(out.len(), 26);
+    assert_eq!(decompress_append(&[1, 0, 9], &mut out, 1), Ok(()));
+    assert_eq!(out.len(), 27);
 }

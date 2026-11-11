@@ -51,6 +51,28 @@ final class Testdata
         }
     }
 
+    /**
+     * Whether Trino 484 cannot open a vector, whatever its codec: key_value_metadata's footer has a
+     * key without a value, and ParquetMetadata.keyValueMetaData (upstream trino-parquet) collects
+     * the pairs with toImmutableMap, which refuses a null value (a NullPointerException). Its
+     * standard copy, which has the same pairs, fails the same way.
+     */
+    static boolean trinoRefuses(String name)
+    {
+        return name.equals("key_value_metadata");
+    }
+
+    /**
+     * The columns of a vector that Trino reads as their stored bits taken as signed, whatever the
+     * codec, with their width: Trino has no unsigned integers, and its reader does not look at an
+     * integer annotation's signedness (ColumnReaderFactory), so the UINT_32 and UINT_64 values above
+     * the signed range are negative numbers in Trino, in the standard copy too.
+     */
+    static Map<String, Integer> readAsSigned(String name)
+    {
+        return name.equals("integer_types") ? Map.of("u32", 32, "u64", 64) : Map.of();
+    }
+
     /** The PCODEC vectors: all but the standard control file. */
     static List<String> pcodecVectorNames()
     {

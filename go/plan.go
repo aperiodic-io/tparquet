@@ -18,7 +18,7 @@ type Policy int
 
 const (
 	// Auto writes the column with PCODEC if that is smaller than the base codec on the first
-	// record batch, and with the base codec otherwise (spec section 6). It applies only to
+	// record batch with rows, and with the base codec otherwise (spec section 6). It applies only to
 	// INT32, INT64, FLOAT and DOUBLE leaves; other leaves use the base codec.
 	Auto Policy = iota
 	// Pcodec writes the column with PCODEC. As the default policy it applies to INT32,
@@ -65,7 +65,9 @@ func WithDefaultPolicy(p Policy) Option { return func(c *config) { c.defPolicy =
 func WithPolicy(path string, p Policy) Option { return func(c *config) { c.policies[path] = p } }
 
 // WithBaseCodec sets the codec and level of the columns that do not use PCODEC; ZSTD level
-// 3 if unset. Set it here rather than with parquet.WithCompression.
+// 3 if unset. Set it here rather than with parquet.WithCompression. It must be a codec
+// arrow-go implements, at a level it accepts, and not PCODEC (use WithDefaultPolicy(Pcodec)
+// for that).
 func WithBaseCodec(codec compress.Compression, level int) Option {
 	return func(c *config) { c.baseCodec, c.baseLevel = codec, level }
 }
@@ -124,6 +126,9 @@ type Plan struct {
 // record batch of the file, used to resolve Auto columns; with a nil or empty sample Auto
 // columns use the base codec.
 func NewPlan(sc *arrow.Schema, sample arrow.RecordBatch, opts ...Option) (*Plan, error) {
+	if abiErr != nil {
+		return nil, abiErr
+	}
 	cfg := newConfig(opts)
 	if err := checkPolicy(cfg.defPolicy); err != nil {
 		return nil, err
@@ -131,8 +136,18 @@ func NewPlan(sc *arrow.Schema, sample arrow.RecordBatch, opts ...Option) (*Plan,
 	if cfg.pcoLevel < compress.DefaultCompressionLevel || cfg.pcoLevel > MaxPcodecLevel {
 		return nil, fmt.Errorf("pcodec: pcodec level %d is not in 0..%d", cfg.pcoLevel, MaxPcodecLevel)
 	}
+	if cfg.baseCodec == Compression {
+		return nil, errors.New("pcodec: the base codec cannot be PCODEC; use WithDefaultPolicy(Pcodec)")
+	}
+	base, err := compress.GetCodec(cfg.baseCodec)
+	if err != nil {
+		return nil, fmt.Errorf("pcodec: base codec: %w", err)
+	}
+	if err := tryLevel(base, cfg.baseLevel); err != nil {
+		return nil, fmt.Errorf("pcodec: base codec %v at level %d: %w", cfg.baseCodec, cfg.baseLevel, err)
+	}
 	if sample != nil && !sample.Schema().Equal(sc) {
-		return nil, errors.New("pcodec: the sample's schema differs from the file's")
+		return nil, errSampleSchema
 	}
 	pq, err := pqarrow.ToParquet(sc, parquet.NewWriterProperties(cfg.props...), cfg.arrowProps)
 	if err != nil {
@@ -170,6 +185,20 @@ func NewPlan(sc *arrow.Schema, sample arrow.RecordBatch, opts ...Option) (*Plan,
 	}
 	return p, nil
 }
+
+// tryLevel compresses one byte with codec at level: arrow-go's codecs panic on a level they
+// refuse (gzip does), at the first page; this finds it before any file is written.
+func tryLevel(codec compress.Codec, level int) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	codec.EncodeLevel(nil, []byte{0}, level)
+	return nil
+}
+
+var errSampleSchema = errors.New("pcodec: the sample's schema differs from the file's")
 
 func checkPolicy(p Policy) error {
 	if p < Auto || p > Base {
@@ -229,9 +258,14 @@ func smaller(pco, base int64) bool { return pco < base }
 
 // scratch writes sample with the current plan to memory and returns the compressed size of
 // each leaf column, summed over row groups.
+//
+// The scratch files are not encrypted: arrow-go lets FileEncryptionProperties make one
+// file only, and wipes their keys when that file closes. Encryption adds about the same
+// bytes to both candidates.
 func (p *Plan) scratch(sample arrow.RecordBatch) (map[string]int64, error) {
 	var buf bytes.Buffer
-	w, err := p.NewFileWriter(&buf)
+	props := append(p.Properties(), parquet.WithEncryptionProperties(nil))
+	w, err := p.newFileWriter(&buf, props)
 	if err != nil {
 		return nil, err
 	}
@@ -305,9 +339,15 @@ func (p *Plan) Properties() []parquet.WriterProperty {
 }
 
 // NewFileWriter returns a pqarrow writer of the plan's schema with the plan's properties.
-// If any column uses PCODEC it adds FooterKey = FooterValue to the footer.
+// If any column uses PCODEC it adds FooterKey = FooterValue to the footer. pqarrow copies
+// the schema metadata into the footer; a FooterKey there is left out, so that the footer
+// has the key once, and only when the file has PCODEC columns.
 func (p *Plan) NewFileWriter(w io.Writer) (*pqarrow.FileWriter, error) {
-	fw, err := pqarrow.NewFileWriter(p.schema, w, parquet.NewWriterProperties(p.Properties()...), p.cfg.arrowProps)
+	return p.newFileWriter(w, p.Properties())
+}
+
+func (p *Plan) newFileWriter(w io.Writer, props []parquet.WriterProperty) (*pqarrow.FileWriter, error) {
+	fw, err := pqarrow.NewFileWriter(withoutFooterKey(p.schema), w, parquet.NewWriterProperties(props...), p.cfg.arrowProps)
 	if err != nil {
 		return nil, err
 	}
@@ -317,4 +357,21 @@ func (p *Plan) NewFileWriter(w io.Writer) (*pqarrow.FileWriter, error) {
 		}
 	}
 	return fw, nil
+}
+
+// withoutFooterKey returns sc without FooterKey in its metadata. pqarrow checks record
+// batches against the writer's schema without the schema metadata, so they still match.
+func withoutFooterKey(sc *arrow.Schema) *arrow.Schema {
+	md := sc.Metadata()
+	if md.FindKey(FooterKey) < 0 {
+		return sc
+	}
+	var keys, values []string
+	for i, k := range md.Keys() {
+		if k != FooterKey {
+			keys, values = append(keys, k), append(values, md.Values()[i])
+		}
+	}
+	kept := arrow.NewMetadata(keys, values)
+	return arrow.NewSchemaWithEndian(sc.Fields(), &kept, sc.Endianness())
 }

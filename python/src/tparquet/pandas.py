@@ -15,7 +15,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from tparquet._core import ParquetFile, Policy, Sink, Source, write_table
+from tparquet._core import ParquetFile, Policy, Sink, Source, _names, write_table
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -100,8 +100,8 @@ def read_parquet(source: Source, columns: Sequence[str] | None = None, **to_pand
     `categories`...).
     """
     f = ParquetFile(source)
-    if columns is not None:
-        wanted = list(columns)
+    wanted = _names(columns)
+    if wanted is not None:
         columns = wanted + [c for c in _index_columns(f.schema) if c not in wanted]
     return _decode_categories(f.read(columns=columns)).to_pandas(**to_pandas_kwargs)
 
@@ -117,6 +117,7 @@ def to_parquet(
     # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
     base: str = "zstd(3)",  # pragma: no mutate
     row_group_size: int | None = None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Writes a DataFrame as a Parquet file with PCODEC where the policy selects it.
 
@@ -128,5 +129,12 @@ def to_parquet(
         raise TypeError(f"expected a pandas DataFrame, got {type(df).__name__}")
     table = _encode_categories(pa.Table.from_pandas(df, preserve_index=index))
     return write_table(
-        table, sink, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size
+        table,
+        sink,
+        policy=policy,
+        columns=columns,
+        level=level,
+        base=base,
+        row_group_size=row_group_size,
+        encodings=encodings,
     )

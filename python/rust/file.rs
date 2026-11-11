@@ -1,10 +1,10 @@
 //! Reading: an open Parquet file (PCODEC or not), its metadata, and streams of its rows.
 
 use crate::errors::{detached, from_arrow, from_parquet, from_pcodec, invalid, os_error};
-use crate::ffi::{ArrowSchema, RecordBatchStream};
+use crate::ffi::{ArrowSchema, RecordBatchStream, named};
 use crate::options::codec_name;
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::{ArrowError, DataType, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedBytes;
@@ -17,28 +17,56 @@ use tparquet::parquet::arrow::ProjectionMask;
 use tparquet::parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
 };
-use tparquet::parquet::errors::Result as ParquetResult;
+use tparquet::parquet::errors::{ParquetError, Result as ParquetResult};
 use tparquet::parquet::file::reader::{ChunkReader, Length};
 use tparquet::parquet::file::statistics::Statistics;
 
 /// Where the file's bytes are.
 #[derive(Clone)]
 enum Source {
-    /// Opened again for every read, so that readers in other threads do not share a cursor.
-    Path(PathBuf),
+    /// The file opened when the footer was read, kept open so that every read sees that
+    /// file even when its path is replaced later; read at given offsets, so that readers in
+    /// other threads do not share a cursor.
+    File {
+        path: PathBuf,
+        file: Arc<std::fs::File>,
+        len: u64,
+    },
     Bytes(Bytes),
 }
 
-/// One open handle on a [`Source`].
+/// One handle on a [`Source`].
 pub enum Reader {
-    File(std::fs::File),
+    File { file: Arc<std::fs::File>, len: u64 },
     Bytes(Bytes),
+}
+
+/// Reads `buf.len()` bytes of `file` (or fewer at its end) at `offset`, without its cursor.
+fn read_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    return std::os::unix::fs::FileExt::read_at(file, buf, offset);
+    #[cfg(windows)]
+    return std::os::windows::fs::FileExt::seek_read(file, buf, offset);
+}
+
+/// A reader of a file from an offset, with a position of its own.
+struct ReadAt {
+    file: Arc<std::fs::File>,
+    pos: u64,
+}
+
+impl Read for ReadAt {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = read_at(&self.file, buf, self.pos)?;
+        self.pos += n as u64;
+        Ok(n)
+    }
 }
 
 impl Length for Reader {
     fn len(&self) -> u64 {
         match self {
-            Self::File(f) => Length::len(f),
+            Self::File { len, .. } => *len,
             Self::Bytes(b) => Length::len(b),
         }
     }
@@ -49,25 +77,48 @@ impl ChunkReader for Reader {
 
     fn get_read(&self, start: u64) -> ParquetResult<Self::T> {
         Ok(match self {
-            Self::File(f) => Box::new(f.get_read(start)?),
+            Self::File { file, .. } => Box::new(ReadAt { file: file.clone(), pos: start }),
             Self::Bytes(b) => Box::new(b.get_read(start)?),
         })
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> ParquetResult<Bytes> {
         match self {
-            Self::File(f) => f.get_bytes(start, length),
+            Self::File { .. } => {
+                // read as the bytes arrive: a length from a corrupt footer allocates no more
+                // than the file holds
+                let mut buf = Vec::new();
+                self.get_read(start)?.take(length as u64).read_to_end(&mut buf)?;
+                if buf.len() != length {
+                    return Err(ParquetError::EOF(format!("{length} bytes at {start} are past the end of the file")));
+                }
+                Ok(buf.into())
+            }
             Self::Bytes(b) => b.get_bytes(start, length),
         }
     }
 }
 
 impl Source {
-    fn open(&self) -> PyResult<Reader> {
-        Ok(match self {
-            Self::Path(p) => Reader::File(std::fs::File::open(p).map_err(|e| os_error(&e, p))?),
+    fn open_path(path: PathBuf) -> PyResult<Self> {
+        let file = std::fs::File::open(&path).map_err(|e| os_error(&e, &path))?;
+        let len = file.metadata().map_err(|e| os_error(&e, &path))?.len();
+        Ok(Self::File { path, file: Arc::new(file), len })
+    }
+
+    fn reader(&self) -> Reader {
+        match self {
+            Self::File { file, len, .. } => Reader::File { file: file.clone(), len: *len },
             Self::Bytes(b) => Reader::Bytes(b.clone()),
-        })
+        }
+    }
+
+    /// The name read errors give the file: its path, if it has one.
+    fn name(&self) -> Option<String> {
+        match self {
+            Self::File { path, .. } => Some(path.display().to_string()),
+            Self::Bytes(_) => None,
+        }
     }
 }
 
@@ -79,16 +130,22 @@ pub struct File {
 }
 
 impl File {
-    fn load(py: Python<'_>, source: Source) -> PyResult<Self> {
+    fn load(py: Python<'_>, source: impl FnOnce() -> PyResult<Source> + Send) -> PyResult<Self> {
         detached(py, || {
-            let reader = source.open()?;
+            let source = source()?;
+            let reader = source.reader();
             let metadata = ArrowReaderMetadata::load(&reader, ArrowReaderOptions::new()).map_err(from_parquet)?;
             Ok(Self { source, metadata })
         })
     }
 
-    pub fn reader(&self) -> PyResult<Reader> {
-        self.source.open()
+    pub fn reader(&self) -> Reader {
+        self.source.reader()
+    }
+
+    /// The Arrow schema of the file.
+    pub fn schema_ref(&self) -> SchemaRef {
+        self.metadata.schema().clone()
     }
 
     /// For the top-level `columns` (all by default): their root indices in file order, where
@@ -112,27 +169,33 @@ impl File {
 /// Opens the Parquet file at `path`.
 #[pyfunction]
 pub fn open_path(py: Python<'_>, path: PathBuf) -> PyResult<File> {
-    File::load(py, Source::Path(path))
+    File::load(py, || Source::open_path(path))
 }
 
 /// Opens a Parquet file held in `data`.
 #[pyfunction]
 pub fn open_bytes(py: Python<'_>, data: PyBackedBytes) -> PyResult<File> {
-    File::load(py, Source::Bytes(Bytes::from_owner(data)))
+    File::load(py, || Ok(Source::Bytes(Bytes::from_owner(data))))
 }
 
-/// Batches of a projected reader with the columns in the requested order.
+/// Batches of a projected reader with the columns in the requested order; its errors name
+/// the file when it has a name.
 struct Reordered {
     inner: ParquetRecordBatchReader,
     order: Vec<usize>,
     schema: SchemaRef,
+    name: Option<String>,
 }
 
 impl Iterator for Reordered {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|b| b.and_then(|b| b.project(&self.order)))
+        let batch = self.inner.next()?.and_then(|b| b.project(&self.order));
+        Some(batch.map_err(|e| match &self.name {
+            Some(name) => named(name, e),
+            None => e,
+        }))
     }
 }
 
@@ -176,7 +239,7 @@ impl File {
             .ok()
             .filter(|n| *n > 0)
             .ok_or_else(|| invalid(format!("batch_size must be positive, got {batch_size}")))?;
-        let mut builder = ParquetRecordBatchReaderBuilder::new_with_metadata(self.reader()?, self.metadata.clone())
+        let mut builder = ParquetRecordBatchReaderBuilder::new_with_metadata(self.reader(), self.metadata.clone())
             .with_batch_size(batch_size);
         if let Some(rgs) = row_groups {
             let n = self.metadata.metadata().num_row_groups();
@@ -199,7 +262,8 @@ impl File {
         let (sorted, order, schema) = self.projection(columns)?;
         let mask = ProjectionMask::roots(self.metadata.parquet_schema(), sorted);
         let inner = builder.with_projection(mask).build().map_err(from_parquet)?;
-        Ok(RecordBatchStream::new(Box::new(Reordered { inner, order, schema })))
+        let name = self.source.name();
+        Ok(RecordBatchStream::new(Box::new(Reordered { inner, order, schema, name })))
     }
 
     /// A stream without rows, with the schema `stream(columns)` has.
@@ -244,41 +308,102 @@ impl File {
 
     /// Per row group, the bounds its statistics give for each `INT32` and `INT64` leaf:
     /// `{path: (min, max)}`, the values as stored (signed). Leaves without both bounds are left
-    /// out.
+    /// out, and so are dotted paths that name two leaves (a top-level field `a.b` and the field
+    /// `b` of a struct `a`).
     fn integer_bounds(&self) -> Vec<BTreeMap<String, (i64, i64)>> {
         let md = self.metadata.metadata();
+        let paths: Vec<String> =
+            md.file_metadata().schema_descr().columns().iter().map(|c| c.path().string()).collect();
+        let unique = |path: &String| paths.iter().filter(|p| *p == path).count() == 1;
         md.row_groups()
             .iter()
             .map(|rg| {
                 rg.columns()
                     .iter()
-                    .filter_map(|c| {
-                        let bounds = match c.statistics()? {
-                            Statistics::Int32(s) => (i64::from(*s.min_opt()?), i64::from(*s.max_opt()?)),
-                            Statistics::Int64(s) => (*s.min_opt()?, *s.max_opt()?),
-                            _ => return None,
-                        };
-                        Some((c.column_path().string(), bounds))
-                    })
+                    .filter_map(|c| Some((c.column_path().string(), bounds(c.statistics()?)?)))
+                    .filter(|(path, _)| unique(path))
                     .collect()
             })
             .collect()
     }
 
+    /// The statistics of the top-level columns that hold signed integers, dates or
+    /// timestamps: how each is stored (`int`, `date32`, `date64` or `timestamp[<unit>]`,
+    /// dictionaries by their values), and per row group `{name: (min, max)}` of those whose
+    /// statistics give both bounds. A name is a top-level field, never a nested leaf with the
+    /// same dotted path.
+    #[allow(clippy::type_complexity)]
+    fn column_bounds(&self) -> (BTreeMap<String, String>, Vec<BTreeMap<String, (i64, i64)>>) {
+        let md = self.metadata.metadata();
+        let leaves = md.file_metadata().schema_descr().columns();
+        let mut kinds = BTreeMap::new();
+        let mut columns = vec![];
+        for field in self.metadata.schema().fields() {
+            let kind = match field.data_type() {
+                DataType::Dictionary(_, values) => stored_kind(values),
+                t => stored_kind(t),
+            };
+            let leaf = leaves.iter().position(|c| c.path().parts() == std::slice::from_ref(field.name()));
+            if let (Some(kind), Some(leaf)) = (kind, leaf) {
+                kinds.insert(field.name().clone(), kind);
+                columns.push((field.name().clone(), leaf));
+            }
+        }
+        let bounds = md
+            .row_groups()
+            .iter()
+            .map(|rg| {
+                columns
+                    .iter()
+                    .filter_map(|(name, leaf)| Some((name.clone(), bounds(rg.column(*leaf).statistics()?)?)))
+                    .collect()
+            })
+            .collect();
+        (kinds, bounds)
+    }
+
     /// The `tparquet inspect --json` report.
     fn inspect(&self, py: Python<'_>) -> PyResult<String> {
         detached(py, || {
-            let report = tparquet::inspect::inspect(&self.reader()?).map_err(from_pcodec)?;
+            let report = tparquet::inspect::inspect(&self.reader()).map_err(from_pcodec)?;
             Ok(report.to_json().to_string())
         })
     }
+}
+
+/// The bounds of `INT32` and `INT64` statistics, as stored (signed).
+fn bounds(s: &Statistics) -> Option<(i64, i64)> {
+    match s {
+        Statistics::Int32(s) => Some((i64::from(*s.min_opt()?), i64::from(*s.max_opt()?))),
+        Statistics::Int64(s) => Some((*s.min_opt()?, *s.max_opt()?)),
+        _ => None,
+    }
+}
+
+/// How a column of type `t` is stored, for the types whose statistics bound signed integers.
+fn stored_kind(t: &DataType) -> Option<String> {
+    Some(match t {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => "int".into(),
+        DataType::Date32 => "date32".into(),
+        DataType::Date64 => "date64".into(),
+        DataType::Timestamp(unit, _) => format!(
+            "timestamp[{}]",
+            match unit {
+                TimeUnit::Second => "s",
+                TimeUnit::Millisecond => "ms",
+                TimeUnit::Microsecond => "us",
+                TimeUnit::Nanosecond => "ns",
+            }
+        ),
+        _ => return None,
+    })
 }
 
 /// Where `a` and `b` first differ (floats compared bit for bit), or `None`.
 #[pyfunction]
 pub fn verify(py: Python<'_>, a: &File, b: &File) -> PyResult<Option<String>> {
     detached(py, || {
-        let d = tparquet::verify::verify(a.reader()?, b.reader()?).map_err(from_pcodec)?;
+        let d = tparquet::verify::verify(a.reader(), b.reader()).map_err(from_pcodec)?;
         Ok(d.map(|d| d.to_string()))
     })
 }

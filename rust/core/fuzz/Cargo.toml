@@ -10,6 +10,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 tparquet-core = { path = ".." }
+# the version the core uses (root Cargo.toml), for differential targets
+pco = "=1.0.4"
 
 # not part of the root workspace: built only with `cargo +nightly fuzz`
 [workspace]
@@ -24,6 +26,27 @@ bench = false
 [[bin]]
 name = "roundtrip"
 path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "structured"
+path = "fuzz_targets/structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "differential"
+path = "fuzz_targets/differential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decimal_roundtrip"
+path = "fuzz_targets/decimal_roundtrip.rs"
 test = false
 doc = false
 bench = false

@@ -183,3 +183,72 @@ func TestVectorsCoverThePageKinds(t *testing.T) {
 		t.Fatalf("go_v1_pages has %d pages", pages)
 	}
 }
+
+// TestVectorsCoverTheNewShapes: maps, deep nesting, many row groups, each policy of the
+// FileWriter, the small integer types and pages without values.
+func TestVectorsCoverTheNewShapes(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Generate(dir); err != nil {
+		t.Fatal(err)
+	}
+	type chunk struct{ path, codec string }
+	read := func(name string) (*file.Reader, []chunk) {
+		r, err := file.OpenParquetFile(filepath.Join(dir, "files", name+".parquet"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.Close() })
+		var chunks []chunk
+		md := r.MetaData()
+		for g := 0; g < md.NumRowGroups(); g++ {
+			for c := 0; c < md.Schema.NumColumns(); c++ {
+				cc, _ := md.RowGroup(g).ColumnChunk(c)
+				codec := cc.Compression().String()
+				if cc.Compression() == tparquet.Compression {
+					codec = "PCODEC"
+				}
+				chunks = append(chunks, chunk{md.Schema.Column(c).Path(), codec})
+			}
+		}
+		return r, chunks
+	}
+	codecOf := func(chunks []chunk) map[string]string {
+		m := map[string]string{}
+		for _, c := range chunks {
+			if prev, ok := m[c.path]; ok && prev != c.codec {
+				t.Fatalf("%s: %s and %s", c.path, prev, c.codec)
+			}
+			m[c.path] = c.codec
+		}
+		return m
+	}
+	_, maps := read("go_maps")
+	if got := codecOf(maps); got["m.key_value.key"] != "PCODEC" || got["m.key_value.value"] != "PCODEC" ||
+		got["tags.key_value.value"] != "PCODEC" {
+		t.Errorf("go_maps: %v", got)
+	}
+	r, deep := read("go_deep_nesting")
+	if r.MetaData().Schema.Column(1).MaxRepetitionLevel() != 2 || len(codecOf(deep)) != 3 {
+		t.Errorf("go_deep_nesting: %v", codecOf(deep))
+	}
+	if r, _ := read("go_many_row_groups"); r.NumRowGroups() < 20 {
+		t.Errorf("go_many_row_groups has %d row groups", r.NumRowGroups())
+	}
+	_, pco := read("go_policy_pcodec")
+	_, base := read("go_policy_base")
+	if got := codecOf(pco); got["id"] != "PCODEC" || got["px"] != "PCODEC" || got["qty"] != "ZSTD" || got["venue"] != "PCODEC" {
+		t.Errorf("go_policy_pcodec: %v", got)
+	}
+	if got := codecOf(base); got["id"] != "ZSTD" || got["px"] != "ZSTD" || got["qty"] != "PCODEC" || got["venue"] != "ZSTD" {
+		t.Errorf("go_policy_base: %v", got)
+	}
+	_, small := read("go_small_ints")
+	for path, codec := range codecOf(small) {
+		if codec != "PCODEC" {
+			t.Errorf("go_small_ints: %s is %s", path, codec)
+		}
+	}
+	if r, _ := read("go_all_null_pages"); r.NumRowGroups() < 3 {
+		t.Errorf("go_all_null_pages has %d row groups", r.NumRowGroups())
+	}
+}

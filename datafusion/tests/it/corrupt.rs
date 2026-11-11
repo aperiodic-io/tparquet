@@ -20,11 +20,19 @@ fn payloads(bytes: &[u8]) -> Vec<(usize, usize)> {
             if !matches!(c.compression(), Compression::PCODEC(_)) {
                 continue;
             }
+            // a chunk without one non-null value has nothing to decode: the reader need not
+            // decompress its pages (all_null_pages' dictionary column)
+            if c.statistics().and_then(|s| s.null_count_opt()) == Some(c.num_values() as u64) {
+                continue;
+            }
             for (body, h) in page_headers(bytes, c) {
                 let (levels, compressed) = h.v2.unwrap_or((0, true));
                 let start = body + levels as usize;
                 let end = body + h.compressed_size as usize;
-                if compressed && start < end {
+                // a values section that decodes to 0 bytes never reaches the codec (spec
+                // section 3: a reader may skip it), so corrupting its payload changes nothing
+                let values = h.uncompressed_size - levels;
+                if compressed && start < end && values > 0 {
                     out.push((start, end));
                 }
             }
@@ -50,8 +58,7 @@ async fn corrupt_payloads_of_every_vector_are_errors() {
     let ctx = url_ctx();
     let dir = tempfile::tempdir().unwrap();
     let mut corrupted = 0;
-    // (`empty` has dictionary pages but no rows: nothing is decoded)
-    for name in vector_names().into_iter().filter(|n| n != "empty") {
+    for name in vector_names() {
         let original = std::fs::read(vector_file(&name)).unwrap();
         for (i, (start, end)) in payloads(&original).into_iter().enumerate() {
             // version byte, mode byte, a truncated body, a zeroed body

@@ -10,6 +10,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
+	"github.com/apache/arrow-go/v18/arrow/float16"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
@@ -121,12 +122,98 @@ func TestNested(t *testing.T) {
 	}
 }
 
+// TestMapsAndHalfFloats: testdata/README.md spells maps as arrays of entry objects with the
+// entry struct's field names, in stored order, and half floats as 4 hex digits.
+func TestMapsAndHalfFloats(t *testing.T) {
+	rec := record(t, []arrow.Field{
+		{Name: "m", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int8), Nullable: true},
+		{Name: "h", Type: arrow.FixedWidthTypes.Float16, Nullable: true},
+	}, func(b *array.RecordBuilder) {
+		mb := b.Field(0).(*array.MapBuilder)
+		mb.Append(true)
+		mb.KeyBuilder().(*array.StringBuilder).AppendValues([]string{"b", "a"}, nil)
+		mb.ItemBuilder().(*array.Int8Builder).AppendValues([]int8{-1, 0}, []bool{true, false})
+		mb.AppendNull()
+		mb.Append(true)
+		hb := b.Field(1).(*array.Float16Builder)
+		hb.Append(float16.New(1))
+		hb.Append(float16.FromBits(0x7e01)) // a NaN payload
+		hb.AppendNull()
+	})
+	defer rec.Release()
+	want := `{"m":[{"key":"b","value":-1},{"key":"a","value":null}],"h":"0x3c00"}
+{"m":null,"h":"0x7e01"}
+{"m":[],"h":null}
+`
+	if got := jsonl(t, rec); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestNullType: every value of a null column is null, though arrow-go gives it no validity
+// bitmap.
+func TestNullType(t *testing.T) {
+	rec := record(t, []arrow.Field{{Name: "n", Type: arrow.Null, Nullable: true}, {Name: "l", Type: arrow.ListOf(arrow.Null)}},
+		func(b *array.RecordBuilder) {
+			b.Field(0).AppendNull()
+			b.Field(0).AppendNull()
+			lb := b.Field(1).(*array.ListBuilder)
+			lb.Append(true)
+			lb.ValueBuilder().AppendNull()
+			lb.Append(true)
+		})
+	defer rec.Release()
+	want := "{\"n\":null,\"l\":[null]}\n{\"n\":null,\"l\":[]}\n"
+	if got := jsonl(t, rec); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestIntervals(t *testing.T) {
+	rec := record(t, []arrow.Field{
+		{Name: "ym", Type: arrow.FixedWidthTypes.MonthInterval, Nullable: true},
+		{Name: "dt", Type: arrow.FixedWidthTypes.DayTimeInterval},
+		{Name: "mdn", Type: arrow.FixedWidthTypes.MonthDayNanoInterval},
+	}, func(b *array.RecordBuilder) {
+		ym := b.Field(0).(*array.MonthIntervalBuilder)
+		ym.Append(14)
+		ym.AppendNull()
+		ym.Append(math.MinInt32)
+		dt := b.Field(1).(*array.DayTimeIntervalBuilder)
+		dt.Append(arrow.DayTimeInterval{Days: 3, Milliseconds: 1500})
+		dt.Append(arrow.DayTimeInterval{Days: math.MinInt32, Milliseconds: math.MaxInt32})
+		dt.Append(arrow.DayTimeInterval{Days: 2, Milliseconds: -7})
+		mdn := b.Field(2).(*array.MonthDayNanoIntervalBuilder)
+		mdn.Append(arrow.MonthDayNanoInterval{Months: 1, Days: -2, Nanoseconds: 3})
+		mdn.Append(arrow.MonthDayNanoInterval{Months: math.MaxInt32, Days: math.MinInt32, Nanoseconds: math.MinInt64})
+		mdn.Append(arrow.MonthDayNanoInterval{Days: 2, Nanoseconds: -7_000_000})
+	})
+	defer rec.Release()
+	want := `{"ym":{"months":14,"days":0,"nanoseconds":0},"dt":{"months":0,"days":3,"nanoseconds":1500000000},"mdn":{"months":1,"days":-2,"nanoseconds":3}}
+{"ym":null,"dt":{"months":0,"days":-2147483648,"nanoseconds":2147483647000000},"mdn":{"months":2147483647,"days":-2147483648,"nanoseconds":-9223372036854775808}}
+{"ym":{"months":-2147483648,"days":0,"nanoseconds":0},"dt":{"months":0,"days":2,"nanoseconds":-7000000},"mdn":{"months":0,"days":2,"nanoseconds":-7000000}}
+`
+	if got := jsonl(t, rec); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// unsupported is a record of a type canonical JSON does not cover: run-end encoded.
+func unsupported(t *testing.T) arrow.RecordBatch {
+	ree := arrow.RunEndEncodedOf(arrow.PrimitiveTypes.Int32, arrow.PrimitiveTypes.Int64)
+	return record(t, []arrow.Field{{Name: "r", Type: ree}},
+		func(b *array.RecordBuilder) {
+			rb := b.Field(0).(*array.RunEndEncodedBuilder)
+			rb.Append(1)
+			rb.ValueBuilder().(*array.Int64Builder).Append(5)
+		})
+}
+
 func TestUnsupportedType(t *testing.T) {
-	rec := record(t, []arrow.Field{{Name: "m", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int8)}},
-		func(b *array.RecordBuilder) { b.Field(0).(*array.MapBuilder).Append(true) })
+	rec := unsupported(t)
 	defer rec.Release()
 	var buf bytes.Buffer
-	if err := WriteRecord(&buf, rec); err == nil || !strings.Contains(err.Error(), "canonical: no JSON form for map") {
+	if err := WriteRecord(&buf, rec); err == nil || !strings.Contains(err.Error(), "canonical: no JSON form for run_end_encoded") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -176,8 +263,7 @@ func TestWriteTable(t *testing.T) {
 		t.Fatalf("got %q", buf.String())
 	}
 
-	m := record(t, []arrow.Field{{Name: "m", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int8)}},
-		func(b *array.RecordBuilder) { b.Field(0).(*array.MapBuilder).Append(true) })
+	m := unsupported(t)
 	defer m.Release()
 	mt := array.NewTableFromRecords(m.Schema(), []arrow.RecordBatch{m})
 	defer mt.Release()

@@ -24,3 +24,20 @@ func TestConformanceVectors(t *testing.T) {
 	}
 	t.Logf("%d vectors match", n)
 }
+
+// TestPayloadVectors decodes every payload of testdata/payloads/manifest.json (or of
+// $TPARQUET_TESTDATA) through the registered codec.
+func TestPayloadVectors(t *testing.T) {
+	dir := os.Getenv("TPARQUET_TESTDATA")
+	if dir == "" {
+		dir = "../testdata"
+	}
+	n, err := vectors.CheckPayloads(dir)
+	if errors.Is(err, vectors.ErrNoPayloads) {
+		t.Skipf("no payload vectors in %s", dir)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d payloads match", n)
+}

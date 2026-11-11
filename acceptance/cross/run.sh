@@ -1,31 +1,45 @@
 #!/usr/bin/env bash
 # Cross-language acceptance: every implementation reads the vectors every other one wrote.
 #
-#   writers: rust (testdata/), go (tparquet-go-gen), python (transcode), duckdb (COPY),
-#            java (TparquetWriter on the parquet-java fork), cpp (tparquet::FileWriter on the
-#            Arrow C++ fork), datafusion (COPY ... STORED AS TPARQUET on the parquet 59 fork)
+#   writers: rust (testdata/), go (tparquet-go-gen), python (transcode, write_table with each
+#            policy), duckdb (COPY with PCODEC and with snappy), rust-cli (tparquet encode with each
+#            policy, of the rust and go vectors), java (TparquetWriter on the parquet-java fork),
+#            cpp (tparquet::FileWriter on the Arrow C++ fork), datafusion (COPY ... STORED AS
+#            TPARQUET on the parquet 59 fork)
 #   readers: rust (gen-testdata --check), go (tparquet-go-gen -check), python, duckdb, java, cpp,
 #            datafusion
 #
 # Needs: the Rust workspace, Go, python/.venv with the package installed (`make python-test`
-# or `maturin develop`), the built DuckDB extension (`make -C duckdb build`), and the Java
+# or `maturin develop`), the built DuckDB extension (`make -C duckdb build`, for the DuckDB of that
+# environment), and the Java
 # packages installed (`make -C java install`, JDK 21 and Maven), and the C++ library (`make -C
 # cpp build`; TPARQUET_CPP_VECTORS names a built tparquet-cpp-vectors instead).
 # Usage: acceptance/cross/run.sh [OUT]   (default: target/cross)
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
+# cargo builds into $CARGO_TARGET_DIR when it is set
+target=${CARGO_TARGET_DIR:-$root/target}
 out=${1:-$root/target/cross}
 py=${PYTHON:-$root/python/.venv/bin/python}
-ext=${TPARQUET_DUCKDB_EXTENSION:-$root/duckdb/build/tparquet.duckdb_extension}
+# the build of the extension for the DuckDB of that Python environment
+ext=${TPARQUET_DUCKDB_EXTENSION:-$root/duckdb/build/v$("$py" -c 'import duckdb; print(duckdb.__version__)')/tparquet.duckdb_extension}
 vectors="$root/acceptance/cross/vectors.py"
 mkdir -p "$out"
 
-cargo build -q --manifest-path "$root/Cargo.toml" -p tparquet --bin gen-testdata
-# the Go package links target/release/libtparquet_capi.a (go/link.go)
+cargo build -q --manifest-path "$root/Cargo.toml" -p tparquet --bin gen-testdata --bin tparquet
 cargo build -q --release --manifest-path "$root/Cargo.toml" -p tparquet-capi
-rust_check() { "$root/target/debug/gen-testdata" --check "$1"; }
-(cd "$root/go" && go build -o "$out/tparquet-go-gen" ./cmd/tparquet-go-gen)
+rust_check() { "$target/debug/gen-testdata" --check "$1"; }
+# the Go package links ../target/release/libtparquet_capi.a (go/link.go), or with the
+# tparquet_external tag the library of TPARQUET_LIB_DIR (go/Makefile)
+lib_dir=${TPARQUET_LIB_DIR:-}
+if [ -z "$lib_dir" ] && [ "$target" != "$root/target" ]; then lib_dir=$target/release; fi
+if [ -n "$lib_dir" ]; then
+  (cd "$root/go" && CGO_LDFLAGS="$lib_dir/libtparquet_capi.a" \
+    go build -tags tparquet_external -o "$out/tparquet-go-gen" ./cmd/tparquet-go-gen)
+else
+  (cd "$root/go" && go build -o "$out/tparquet-go-gen" ./cmd/tparquet-go-gen)
+fi
 go_check() { "$out/tparquet-go-gen" -check "$1"; }
 python_check() { "$py" "$vectors" check-python "$1"; }
 duckdb_check() { "$py" "$vectors" check-duckdb "$ext" "$1"; }
@@ -46,14 +60,16 @@ echo "== writers"
 "$out/tparquet-go-gen" "$out/go" > /dev/null
 "$py" "$vectors" write-python "$out/python" "$root/testdata" "$out/go"
 "$py" "$vectors" write-duckdb "$ext" "$out/duckdb" "$root/testdata" "$out/go"
+"$py" "$vectors" write-cli "$target/debug/tparquet" "$out/rust-cli" "$root/testdata" "$out/go"
 rm -rf "$out/java" && java_cli write "$out/java" "$root/testdata" "$out/go"
 rm -rf "$out/cpp" && "$cpp_cli" write "$out/cpp" "$root/testdata" "$out/go" > /dev/null
 rm -rf "$out/datafusion" && "$df_cli" write "$out/datafusion" "$root/testdata" "$out/go" > /dev/null
 
-declare -A dirs=([rust]="$root/testdata" [go]="$out/go" [python]="$out/python" [duckdb]="$out/duckdb" [java]="$out/java" [cpp]="$out/cpp" [datafusion]="$out/datafusion")
-for writer in rust go python duckdb java cpp datafusion; do
+declare -A dirs=([rust]="$root/testdata" [go]="$out/go" [python]="$out/python" [duckdb]="$out/duckdb"
+  [rust-cli]="$out/rust-cli" [java]="$out/java" [cpp]="$out/cpp" [datafusion]="$out/datafusion")
+for writer in rust go python duckdb rust-cli java cpp datafusion; do
   for reader in rust go python duckdb java cpp datafusion; do
-    printf '%-7s -> %-7s ' "$writer" "$reader"
+    printf '%-10s -> %-10s ' "$writer" "$reader"
     "${reader}_check" "${dirs[$writer]}"
   done
 done

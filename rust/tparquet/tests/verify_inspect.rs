@@ -50,6 +50,30 @@ fn floats_are_compared_bit_for_bit() {
 }
 
 #[test]
+fn interval_columns_are_compared() {
+    use arrow_array::{IntervalDayTimeArray, IntervalYearMonthArray};
+    use arrow_buffer::IntervalDayTime;
+    let columns = |ms: i32| -> Vec<(&str, ArrayRef)> {
+        vec![
+            ("ym", Arc::new(IntervalYearMonthArray::from(vec![Some(14), None]))),
+            (
+                "dt",
+                Arc::new(IntervalDayTimeArray::from(vec![IntervalDayTime::new(3, ms), IntervalDayTime::new(-1, 0)])),
+            ),
+        ]
+    };
+    assert_eq!(verify(file(columns(1500)), file(columns(1500))).unwrap(), None);
+    assert_eq!(
+        verify(file(columns(1500)), file(columns(1501))).unwrap(),
+        Some(Difference::Row {
+            row: 0,
+            a: "{\"ym\":{\"months\":14,\"days\":0,\"nanoseconds\":0},\"dt\":{\"months\":0,\"days\":3,\"nanoseconds\":1500000000}}".into(),
+            b: "{\"ym\":{\"months\":14,\"days\":0,\"nanoseconds\":0},\"dt\":{\"months\":0,\"days\":3,\"nanoseconds\":1501000000}}".into()
+        })
+    );
+}
+
+#[test]
 fn schemas_and_row_counts() {
     let a = file(vec![("x", Arc::new(Int32Array::from(vec![1])) as ArrayRef)]);
     let b = file(vec![("x", Arc::new(Int64Array::from(vec![1])) as ArrayRef)]);
@@ -199,4 +223,71 @@ fn inspect_rejects_corrupt_files() {
         errors += usize::from(inspect(&Bytes::from(g)).is_err());
     }
     assert!(errors > 0);
+}
+
+/// `file` with its footer replaced by one whose row groups are `rgs` copies of its first.
+fn repeat_row_group(file: &Bytes, rgs: usize) -> Bytes {
+    use tparquet::parquet::file::metadata::{ParquetMetaDataReader, ParquetMetaDataWriter};
+    let metadata = ParquetMetaDataReader::new().parse_and_finish(file).unwrap();
+    let footer = 8 + u32::from_le_bytes(file[file.len() - 8..file.len() - 4].try_into().unwrap()) as usize;
+    let rg = metadata.row_group(0).clone();
+    let metadata = metadata.into_builder().set_row_groups(vec![rg; rgs]).build();
+    let mut out = file[..file.len() - footer].to_vec();
+    ParquetMetaDataWriter::new(&mut out, &metadata).finish().unwrap();
+    Bytes::from(out)
+}
+
+#[test]
+fn inspect_work_is_bounded_by_the_file_size() {
+    // a footer whose row groups all point at the same column chunk would make inspect read
+    // the chunk once per row group: work quadratic in the file size
+    let x = Int64Array::from_iter_values((0..100_000).map(|i| i * i));
+    let batch = RecordBatch::try_from_iter([("x", Arc::new(x) as ArrayRef)]).unwrap();
+    let f = write(&[batch], WriterOptions::default().with_policy(Policy::Base)).0;
+    assert_eq!(inspect(&repeat_row_group(&f, 1)).unwrap().row_groups, 1);
+    let err = inspect(&repeat_row_group(&f, 2)).unwrap_err();
+    assert_eq!(err.to_string(), "column x: the column chunks add up to more than the file");
+}
+
+/// A file of `rows` rows of `x` in row groups of 1000, the first byte of the column chunk of
+/// row group `bad` (if any) corrupted.
+fn groups(rows: i64, bad: Option<usize>) -> Bytes {
+    use tparquet::parquet::file::properties::WriterProperties;
+    let x = Int64Array::from_iter_values(0..rows);
+    let batch = RecordBatch::try_from_iter([("x", Arc::new(x) as ArrayRef)]).unwrap();
+    let props = WriterProperties::builder().set_max_row_group_row_count(Some(1000)).build();
+    let f = write(&[batch], WriterOptions::default().with_policy(Policy::Pcodec).with_properties(props)).0;
+    let Some(bad) = bad else { return f };
+    let metadata = tparquet::parquet::file::metadata::ParquetMetaDataReader::new().parse_and_finish(&f).unwrap();
+    let start = metadata.row_group(bad).column(0).byte_range().0 as usize;
+    let mut g = f.to_vec();
+    g[start..start + 4].copy_from_slice(&[0xff; 4]);
+    Bytes::from(g)
+}
+
+/// `verify(a, b)`, or `None` if it does not return within a minute.
+fn verify_in_time(a: Bytes, b: Bytes) -> Option<tparquet::Result<Option<Difference>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(verify(a, b)));
+    rx.recv_timeout(std::time::Duration::from_secs(60)).ok()
+}
+
+#[test]
+fn verify_reports_errors_after_the_shorter_file_ends() {
+    // the longer file cannot be read to its end: that is an error, not a row count (the
+    // reader yields the same error again and again, so counting the rest never ended)
+    let r = verify_in_time(groups(3000, Some(2)), groups(1000, None)).expect("verify returns");
+    assert!(r.is_err(), "{r:?}");
+    let r = verify_in_time(groups(1000, None), groups(3000, Some(1))).expect("verify returns");
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(
+        verify(groups(3000, None), groups(1000, None)).unwrap(),
+        Some(Difference::RowCount { a: 3000, b: 1000 })
+    );
+    assert_eq!(
+        verify(groups(1000, None), groups(2000, None)).unwrap(),
+        Some(Difference::RowCount { a: 1000, b: 2000 })
+    );
+    // before the end, a corrupt row group is an error too
+    assert!(verify(groups(3000, Some(1)), groups(3000, None)).is_err());
 }

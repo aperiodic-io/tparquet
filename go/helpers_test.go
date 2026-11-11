@@ -64,9 +64,7 @@ func assertSameData(t testing.TB, data []byte, recs ...arrow.RecordBatch) {
 	if err := canonical.WriteTable(&got, tbl); err != nil {
 		t.Fatal(err)
 	}
-	if ok, diff := canonical.Equal(got.Bytes(), jsonlOfRecords(t, recs...)); !ok {
-		t.Fatalf("data differs after the round trip: %s", diff)
-	}
+	sameJSONL(t, "data after the round trip", got.Bytes(), jsonlOfRecords(t, recs...))
 }
 
 // assertSameTable checks that the file holds exactly the rows of want.
@@ -85,9 +83,7 @@ func assertSameTable(t testing.TB, data []byte, want arrow.Table) {
 	if err := canonical.WriteTable(&got, tbl); err != nil {
 		t.Fatal(err)
 	}
-	if ok, diff := canonical.Equal(got.Bytes(), w.Bytes()); !ok {
-		t.Fatalf("data differs: %s", diff)
-	}
+	sameJSONL(t, "data", got.Bytes(), w.Bytes())
 }
 
 // columnCodecs returns the codec of every column chunk, by path, checking that all row

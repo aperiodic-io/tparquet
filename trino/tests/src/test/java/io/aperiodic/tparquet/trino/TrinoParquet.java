@@ -16,11 +16,13 @@ import io.trino.spi.Page;
 import io.trino.spi.connector.SourcePage;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.DecimalType;
+import io.trino.spi.type.MapType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.TimeType;
 import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.TimestampWithTimeZoneType;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeOperators;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.schema.GroupType;
@@ -61,6 +63,8 @@ import static io.trino.spi.type.VarcharType.VARCHAR;
 final class TrinoParquet
 {
     private TrinoParquet() {}
+
+    private static final TypeOperators TYPE_OPERATORS = new TypeOperators();
 
     /** A local file, read as Trino's file systems read it: by position. */
     static final class LocalDataSource
@@ -124,6 +128,11 @@ final class TrinoParquet
                 org.apache.parquet.schema.Type element = repeated.isPrimitive() || repeated.asGroupType().getFieldCount() != 1
                         ? repeated : repeated.asGroupType().getType(0);
                 return new ArrayType(trinoType(element));
+            }
+            if (logical instanceof LogicalTypeAnnotation.MapLogicalTypeAnnotation) {
+                // MAP > repeated group entries > key, value
+                GroupType entries = group.getType(0).asGroupType();
+                return new MapType(trinoType(entries.getType(0)), trinoType(entries.getType(1)), TYPE_OPERATORS);
             }
             List<RowType.Field> fields = new ArrayList<>();
             for (org.apache.parquet.schema.Type f : group.getFields()) {
@@ -206,7 +215,11 @@ final class TrinoParquet
         List<RowGroupInfo> rowGroups = new ArrayList<>();
         long start = 0;
         for (BlockMetadata block : metadata.getBlocks()) {
-            rowGroups.add(new RowGroupInfo(createPrunedColumnsMetadata(block, source.getId(), descriptors), start, Optional.empty()));
+            // as the connectors' PredicateUtils.getFilteredRowGroups: a row group without rows is
+            // never read (its column chunks can be empty, which ParquetReader does not accept)
+            if (block.rowCount() > 0) {
+                rowGroups.add(new RowGroupInfo(createPrunedColumnsMetadata(block, source.getId(), descriptors), start, Optional.empty()));
+            }
             start += block.rowCount();
         }
         List<Page> pages = new ArrayList<>();

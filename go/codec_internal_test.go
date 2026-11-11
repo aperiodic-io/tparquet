@@ -3,8 +3,10 @@ package tparquet
 import (
 	"bytes"
 	"errors"
+	mrand "math/rand"
 	"os"
 	"testing"
+	"testing/quick"
 
 	"github.com/apache/arrow-go/v18/parquet"
 	"github.com/apache/arrow-go/v18/parquet/compress"
@@ -88,5 +90,29 @@ func TestVendoredHeaderMatchesTheCAPI(t *testing.T) {
 func TestSmallerKeepsBaseOnATie(t *testing.T) {
 	if !smaller(9, 10) || smaller(10, 10) || smaller(11, 10) {
 		t.Fatal("smaller")
+	}
+}
+
+// TestQuickLevelPacking: unpackLevel inverts Level for every type and pcodec level, and any
+// level without the tag carries no hint.
+func TestQuickLevelPacking(t *testing.T) {
+	inverse := func(typ uint8, lvl uint8) bool {
+		pt, l := parquet.Type(typ%8), int(lvl%14)-1
+		gotT, gotL := unpackLevel(Level(pt, l))
+		return gotT == int32(pt) && gotL == int32(l)
+	}
+	untagged := func(level int) bool {
+		if level>>16 == levelTag {
+			return true
+		}
+		pt, l := unpackLevel(level)
+		return pt == -1 && l == -1
+	}
+	cfg := &quick.Config{MaxCount: 5000, Rand: mrand.New(mrand.NewSource(1))}
+	if err := quick.Check(inverse, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := quick.Check(untagged, cfg); err != nil {
+		t.Fatal(err)
 	}
 }

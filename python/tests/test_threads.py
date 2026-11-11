@@ -143,3 +143,67 @@ def test_core_without_pyarrow(tmp_path: pathlib.Path) -> None:
     assert out[3] == "3 ['a', 'b', 's']"
     assert out[4].startswith("ImportError: this function returns pyarrow objects")
     assert "read_batches()" in out[4]
+
+
+def test_one_writer_shared_by_threads(numbers: pa.Table) -> None:
+    buf = io.BytesIO()
+    batches = numbers.to_batches(max_chunksize=100)
+    with ppc.Writer(buf, numbers.schema, row_group_size=500) as w, ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(w.write, batches * 4))
+    back = ppc.read_table(io.BytesIO(buf.getvalue()))
+    assert back.num_rows == numbers.num_rows * 4
+    # every batch was written whole (writes do not interleave)
+    assert sorted(canonical.lines(back)) == sorted(list(canonical.lines(numbers)) * 4)
+
+
+def test_close_while_threads_write(numbers: pa.Table) -> None:
+    buf = io.BytesIO()
+    w = ppc.Writer(buf, numbers.schema)
+    written: list[int] = []
+    refused: list[str] = []
+    start = threading.Barrier(5)
+
+    def write() -> None:
+        start.wait()
+        for b in numbers.to_batches(max_chunksize=50):
+            try:
+                w.write(b)
+                written.append(b.num_rows)
+            except ppc.PcodecError as e:
+                refused.append(str(e))
+
+    threads = [threading.Thread(target=write) for _ in range(4)]
+    for t in threads:
+        t.start()
+    start.wait()
+    w.close()
+    for t in threads:
+        t.join()
+    assert set(refused) <= {"the writer is closed"}
+    # what was written before the close is in the file, the rest was refused
+    assert ppc.read_table(io.BytesIO(buf.getvalue())).num_rows == sum(written)
+
+
+def test_the_gil_is_released_while_a_path_is_read(tmp_path: pathlib.Path, big: pa.Table) -> None:
+    path = tmp_path / "big.parquet"
+    ppc.write_table(big, path, policy="pcodec")
+    assert ticks_while(lambda: ppc.ParquetFile(path).read()) > 1000
+    # (inspect reads page headers only: too quick to measure)
+    assert ticks_while(lambda: ppc.verify(path, path)) > 1000
+    out = tmp_path / "out.parquet"
+    assert ticks_while(lambda: ppc.transcode(path, out, target="standard")) > 1000
+
+
+def test_streams_of_one_file_in_many_threads(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
+    path = tmp_path / "t.parquet"
+    ppc.write_table(numbers, path, row_group_size=200)
+    f = ppc.ParquetFile(path)
+    want = canonical.dumps(numbers.select(["i64", "s"]))
+
+    def read(i: int) -> str:
+        # through the C stream from a thread that does not hold the GIL while pyarrow pulls
+        reader = pa.RecordBatchReader.from_stream(f.stream(columns=["i64", "s"], batch_size=37 + i))
+        return canonical.dumps(reader.read_all())
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert set(pool.map(read, range(32))) == {want}

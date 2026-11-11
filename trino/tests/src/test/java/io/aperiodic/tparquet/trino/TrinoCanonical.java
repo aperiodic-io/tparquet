@@ -5,6 +5,7 @@ import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.IntArrayBlock;
 import io.trino.spi.block.LongArrayBlock;
+import io.trino.spi.block.SqlMap;
 import io.trino.spi.block.SqlRow;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.BigintType;
@@ -15,6 +16,7 @@ import io.trino.spi.type.DoubleType;
 import io.trino.spi.type.Int128;
 import io.trino.spi.type.IntegerType;
 import io.trino.spi.type.LongTimestampWithTimeZone;
+import io.trino.spi.type.MapType;
 import io.trino.spi.type.RealType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.TimeType;
@@ -113,6 +115,23 @@ final class TrinoCanonical
                         out.append(',');
                     }
                     value(out, t.getElementType(), elements, i);
+                }
+                out.append(']');
+            }
+            case MapType t -> {
+                // the entries in stored order; Trino's map type has no names for an entry's fields,
+                // and the vectors' maps have Parquet's standard ones, key and value
+                SqlMap map = t.getObject(block, position);
+                out.append('[');
+                for (int i = 0; i < map.getSize(); i++) {
+                    if (i > 0) {
+                        out.append(',');
+                    }
+                    out.append("{\"key\":");
+                    value(out, t.getKeyType(), map.getRawKeyBlock(), map.getRawOffset() + i);
+                    out.append(",\"value\":");
+                    value(out, t.getValueType(), map.getRawValueBlock(), map.getRawOffset() + i);
+                    out.append('}');
                 }
                 out.append(']');
             }

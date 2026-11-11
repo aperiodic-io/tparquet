@@ -52,7 +52,8 @@ fn files(out: &Path) -> Result<()> {
         for b in &case.batches {
             canonical::write_batch(b, &mut lines).map_err(|e| format!("{}: {e}", case.name))?;
         }
-        let report = inspect(&bytes::Bytes::from(bytes.clone())).map_err(|e| format!("{}: {e}", case.name))?;
+        let file = bytes::Bytes::from(bytes.clone());
+        let report = inspect(&file).map_err(|e| format!("{}: {e}", case.name))?;
         for c in &report.columns {
             modes.extend(c.modes.keys().cloned());
         }
@@ -64,6 +65,7 @@ fn files(out: &Path) -> Result<()> {
             "rows": report.rows,
             "row_groups": report.row_groups,
             "pcodec_version": report.pcodec_version,
+            "key_value_metadata": key_value_metadata(&file).map_err(|e| format!("{}: {e}", case.name))?,
             "columns": report.columns.iter().map(|c| json!({
                 "path": c.path,
                 "physical_type": c.physical_type,
@@ -81,6 +83,21 @@ fn files(out: &Path) -> Result<()> {
         }
     }
     write(&files.join("manifest.json"), &json_bytes(&json!({ "files": manifest })))
+}
+
+/// The footer's key-value pairs, but the Arrow schema (`ARROW:schema`, which every arrow-rs
+/// file has): key to value, `null` for a key without one.
+fn key_value_metadata(file: &bytes::Bytes) -> Result<Value> {
+    use tparquet::parquet::file::metadata::ParquetMetaDataReader;
+    let metadata = ParquetMetaDataReader::new().parse_and_finish(file).map_err(|e| e.to_string())?;
+    let pairs = metadata.file_metadata().key_value_metadata().cloned().unwrap_or_default();
+    let mut out = serde_json::Map::new();
+    for kv in pairs.into_iter().filter(|kv| kv.key != "ARROW:schema") {
+        if out.insert(kv.key.clone(), kv.value.into()).is_some() {
+            return Err(format!("the footer has the key {:?} twice", kv.key));
+        }
+    }
+    Ok(Value::Object(out))
 }
 
 fn payloads(out: &Path) -> Result<()> {

@@ -178,4 +178,40 @@ mod tests {
         // under 100 values no exception is allowed
         assert_eq!(split(&v[..99], 0), None);
     }
+
+    #[test]
+    fn split_keeps_integers_below_2_pow_62() {
+        let below = f64::from_bits(2f64.powi(62).to_bits() - 1);
+        let mut v: Vec<f64> = (0..500).map(f64::from).collect();
+        v[10] = below;
+        v[11] = -below;
+        v[20] = 2f64.powi(62);
+        v[21] = -2f64.powi(62);
+        v[22] = f64::MAX;
+        let (qs, exc) = split(&v, 0).unwrap();
+        assert_eq!(exc, vec![20, 21, 22]);
+        assert_eq!((qs[10], qs[11]), (below as i64, -below as i64));
+        assert_eq!((qs[20], qs[21], qs[22]), (19, 19, 19), "exceptions repeat q[19]");
+        // at a higher exponent the same bound applies to v * 10^e
+        assert_eq!(exact(4.611_686_018_427_387e17f64, 1), Some((1 << 62) - 1_024));
+        assert_eq!(exact(4.611_686_018_427_388e17f64, 1), None);
+    }
+
+    #[test]
+    fn exact_bounds_floats_too() {
+        let below = f32::from_bits(2f32.powi(62).to_bits() - 1);
+        assert_eq!(exact(below, 0), Some(below as i64));
+        assert_eq!(exact(2f32.powi(62), 0), None);
+        assert_eq!(exact(-2f32.powi(62), 0), None);
+        assert_eq!(exact(f32::MAX, 0), None);
+        assert_eq!(exact(1e-18f64, 18), Some(1));
+        assert_eq!(exact(1e-18f32, 18), Some(1));
+        assert_eq!(exact(-0.0f32, 0), None);
+        assert_eq!(exact(f32::from_bits(1), 18), None, "a subnormal is 0 at every exponent");
+        assert_eq!(exact(f64::from_bits(1), 18), None);
+        // a half rounds away from zero; the check then refuses the q that does not decode back
+        assert_eq!(exact(0.125f64, 2), None);
+        assert_eq!(exact(0.125f64, 3), Some(125));
+        assert_eq!(exact(-0.125f64, 3), Some(-125));
+    }
 }

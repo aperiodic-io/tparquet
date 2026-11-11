@@ -60,7 +60,198 @@ func all() []vector {
 			"b": parquet.Types.ByteArray, "flag": parquet.Types.Boolean, "fsb": parquet.Types.FixedLenByteArray})},
 		{name: "go_auto_mixed", recs: trades, auto: true, props: []parquet.WriterProperty{parquet.WithMaxRowGroupLength(4000)}},
 		{name: "go_empty", recs: empty, props: pcodecAll(map[string]parquet.Type{"x": i64, "y": f64}, v2)},
+		{name: "go_maps", recs: maps, opts: []tparquet.Option{tparquet.WithDefaultPolicy(tparquet.Pcodec)}},
+		{name: "go_deep_nesting", recs: deepNesting, opts: []tparquet.Option{tparquet.WithDefaultPolicy(tparquet.Pcodec)}},
+		{name: "go_many_row_groups", recs: manyRowGroups, auto: true,
+			props: []parquet.WriterProperty{parquet.WithMaxRowGroupLength(397)}},
+		{name: "go_policy_pcodec", recs: orders, props: []parquet.WriterProperty{parquet.WithMaxRowGroupLength(500)},
+			opts: []tparquet.Option{tparquet.WithDefaultPolicy(tparquet.Pcodec), tparquet.WithPolicy("qty", tparquet.Base),
+				tparquet.WithPolicy("venue", tparquet.Pcodec)}},
+		{name: "go_policy_base", recs: orders, props: []parquet.WriterProperty{parquet.WithMaxRowGroupLength(500)},
+			opts: []tparquet.Option{tparquet.WithDefaultPolicy(tparquet.Base), tparquet.WithPolicy("qty", tparquet.Pcodec)}},
+		{name: "go_small_ints", recs: smallInts, opts: []tparquet.Option{tparquet.WithDefaultPolicy(tparquet.Pcodec)}},
+		{name: "go_all_null_pages", recs: allNull, props: []parquet.WriterProperty{parquet.WithMaxRowGroupLength(1000)},
+			opts: []tparquet.Option{tparquet.WithDefaultPolicy(tparquet.Pcodec)}},
 	}
+}
+
+// maps: map<int32, double> with null maps, empty maps and null values; map<string, int64>.
+func maps() []arrow.RecordBatch {
+	sc := fields(arrow.Field{Name: "m", Type: arrow.MapOf(arrow.PrimitiveTypes.Int32, arrow.PrimitiveTypes.Float64), Nullable: true},
+		arrow.Field{Name: "tags", Type: arrow.MapOf(arrow.BinaryTypes.String, arrow.PrimitiveTypes.Int64), Nullable: true})
+	return []arrow.RecordBatch{build(sc, 1500, 12, func(b *array.RecordBuilder, r *rand.Rand, i int) {
+		mb := b.Field(0).(*array.MapBuilder)
+		switch i % 7 {
+		case 0:
+			mb.AppendNull()
+		case 1:
+			mb.Append(true)
+		default:
+			mb.Append(true)
+			for k := 0; k < r.IntN(5); k++ {
+				mb.KeyBuilder().(*array.Int32Builder).Append(int32(i*10 + k))
+				if k == 2 {
+					mb.ItemBuilder().AppendNull()
+				} else {
+					mb.ItemBuilder().(*array.Float64Builder).Append(float64(i+k) / 8)
+				}
+			}
+		}
+		tb := b.Field(1).(*array.MapBuilder)
+		if i%5 == 0 {
+			if i%10 == 0 {
+				tb.AppendNull()
+			} else {
+				tb.Append(true)
+			}
+			return
+		}
+		tb.Append(true)
+		for k := 0; k <= i%3; k++ {
+			tb.KeyBuilder().(*array.StringBuilder).Append([]string{"bid", "ask", "last"}[k])
+			tb.ItemBuilder().(*array.Int64Builder).Append(1_000_000 + int64(i*3+k)*17)
+		}
+	})}
+}
+
+// deepNesting: list<struct<id int64, pts list<struct<x double, y int32>>>>, with a null and
+// an empty value at every level that has one.
+func deepNesting() []arrow.RecordBatch {
+	point := arrow.StructOf(arrow.Field{Name: "x", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+		arrow.Field{Name: "y", Type: arrow.PrimitiveTypes.Int32, Nullable: true})
+	leg := arrow.StructOf(arrow.Field{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		arrow.Field{Name: "pts", Type: arrow.ListOf(point), Nullable: true})
+	sc := fields(arrow.Field{Name: "legs", Type: arrow.ListOf(leg), Nullable: true})
+	return []arrow.RecordBatch{build(sc, 800, 13, func(b *array.RecordBuilder, r *rand.Rand, i int) {
+		lb := b.Field(0).(*array.ListBuilder)
+		switch i % 13 {
+		case 0:
+			lb.AppendNull()
+			return
+		case 1:
+			lb.Append(true)
+			return
+		}
+		lb.Append(true)
+		legs := lb.ValueBuilder().(*array.StructBuilder)
+		for j := 0; j <= r.IntN(3); j++ {
+			k := (i + j) % 11
+			if k == 0 {
+				legs.AppendNull()
+				continue
+			}
+			legs.Append(true)
+			if k == 1 {
+				legs.FieldBuilder(0).AppendNull()
+			} else {
+				legs.FieldBuilder(0).(*array.Int64Builder).Append(int64(i*100 + j))
+			}
+			pts := legs.FieldBuilder(1).(*array.ListBuilder)
+			switch k {
+			case 2:
+				pts.AppendNull()
+				continue
+			case 3:
+				pts.Append(true)
+				continue
+			}
+			pts.Append(true)
+			p := pts.ValueBuilder().(*array.StructBuilder)
+			for m := 0; m <= r.IntN(4); m++ {
+				if (i+m)%9 == 0 {
+					p.AppendNull()
+					continue
+				}
+				p.Append(true)
+				if m == 1 {
+					p.FieldBuilder(0).AppendNull()
+				} else {
+					p.FieldBuilder(0).(*array.Float64Builder).Append(float64(i)/2 + float64(m))
+				}
+				if m == 2 {
+					p.FieldBuilder(1).AppendNull()
+				} else {
+					p.FieldBuilder(1).(*array.Int32Builder).Append(int32(i*7+m) - 500)
+				}
+			}
+		}
+	})}
+}
+
+// manyRowGroups: the first batch of trades, which go_many_row_groups writes in row groups of
+// 397 rows.
+func manyRowGroups() []arrow.RecordBatch {
+	recs := trades()
+	recs[1].Release()
+	return recs[:1]
+}
+
+// orders: numbers and strings, written with each FileWriter policy and per-column overrides.
+func orders() []arrow.RecordBatch {
+	sc := fields(arrow.Field{Name: "id", Type: arrow.PrimitiveTypes.Int64},
+		arrow.Field{Name: "px", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+		arrow.Field{Name: "qty", Type: arrow.PrimitiveTypes.Float64},
+		arrow.Field{Name: "venue", Type: arrow.BinaryTypes.String})
+	ticks := int64(4_200_000)
+	return []arrow.RecordBatch{build(sc, 2000, 14, func(b *array.RecordBuilder, r *rand.Rand, i int) {
+		ticks += int64(r.IntN(7)) - 3
+		b.Field(0).(*array.Int64Builder).Append(int64(i)*13 + 1_000_000_000)
+		if i%9 == 4 {
+			b.Field(1).AppendNull()
+		} else {
+			b.Field(1).(*array.Float64Builder).Append(float64(ticks) / 100)
+		}
+		b.Field(2).(*array.Float64Builder).Append(float64(1+r.IntN(900)) / 100)
+		b.Field(3).(*array.StringBuilder).Append([]string{"XNAS", "XNYS", "ARCX", "BATS"}[r.IntN(4)])
+	})}
+}
+
+// smallInts: the integer types arrow-go stores in INT32 (and uint64 in INT64), at their
+// extremes first.
+func smallInts() []arrow.RecordBatch {
+	sc := fields(arrow.Field{Name: "i8", Type: arrow.PrimitiveTypes.Int8},
+		arrow.Field{Name: "i16", Type: arrow.PrimitiveTypes.Int16, Nullable: true},
+		arrow.Field{Name: "u8", Type: arrow.PrimitiveTypes.Uint8},
+		arrow.Field{Name: "u16", Type: arrow.PrimitiveTypes.Uint16},
+		arrow.Field{Name: "u32", Type: arrow.PrimitiveTypes.Uint32, Nullable: true},
+		arrow.Field{Name: "u64", Type: arrow.PrimitiveTypes.Uint64})
+	return []arrow.RecordBatch{build(sc, 1200, 15, func(b *array.RecordBuilder, r *rand.Rand, i int) {
+		pick := func(ends []uint64, mid uint64) uint64 {
+			if i < len(ends) {
+				return ends[i]
+			}
+			return mid
+		}
+		b.Field(0).(*array.Int8Builder).Append(int8(pick([]uint64{0x80, 0x7f, 0, 0xff}, r.Uint64())))
+		if i%6 == 5 {
+			b.Field(1).AppendNull()
+		} else {
+			b.Field(1).(*array.Int16Builder).Append(int16(pick([]uint64{0x8000, 0x7fff, 0, 0xffff}, uint64(r.IntN(2000)-1000))))
+		}
+		b.Field(2).(*array.Uint8Builder).Append(uint8(pick([]uint64{0, math.MaxUint8, 1, 128}, r.Uint64())))
+		b.Field(3).(*array.Uint16Builder).Append(uint16(pick([]uint64{0, math.MaxUint16, 1, 32768}, uint64(r.IntN(300)))))
+		if i%5 == 4 {
+			b.Field(4).AppendNull()
+		} else {
+			b.Field(4).(*array.Uint32Builder).Append(uint32(pick([]uint64{0, math.MaxUint32, 1, 1 << 31}, math.MaxUint32-uint64(r.IntN(1000)))))
+		}
+		b.Field(5).(*array.Uint64Builder).Append(pick([]uint64{0, math.MaxUint64, 1, 1 << 63}, math.MaxUint64-uint64(r.IntN(100_000))))
+	})}
+}
+
+// allNull: row groups whose PCODEC pages have no values (an empty values section), and a
+// column without any value.
+func allNull() []arrow.RecordBatch {
+	sc := fields(arrow.Field{Name: "x", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		arrow.Field{Name: "y", Type: arrow.PrimitiveTypes.Float64, Nullable: true})
+	return []arrow.RecordBatch{build(sc, 3000, 16, func(b *array.RecordBuilder, r *rand.Rand, i int) {
+		if i < 2000 || i%4 == 0 {
+			b.Field(0).AppendNull()
+		} else {
+			b.Field(0).(*array.Int64Builder).Append(int64(i) * 11)
+		}
+		b.Field(1).AppendNull()
+	})}
 }
 
 func ints() []arrow.RecordBatch {

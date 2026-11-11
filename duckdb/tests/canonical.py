@@ -45,6 +45,8 @@ def values(arr: pa.Array, file_type: pa.DataType) -> list:
     """The canonical JSON text of every element of `arr` (None for null)."""
     if pa.types.is_dictionary(arr.type):
         arr = arr.dictionary_decode()
+    if isinstance(arr.type, pa.ExtensionType):
+        arr = arr.storage
     t = arr.type
     want = _base(file_type)
     valid = [v.is_valid for v in arr] if arr.null_count else [True] * len(arr)
@@ -96,6 +98,11 @@ def values(arr: pa.Array, file_type: pa.DataType) -> list:
         return wrap(["null" if v is None else str(v) for v in _rescale(raw, t.unit, want.unit)])
     if pa.types.is_date32(t):
         return wrap(["null" if v is None else str(v) for v in arr.view(pa.int32()).to_pylist()])
+    if pa.types.is_interval(t):
+        # DuckDB's INTERVAL arrives as month-day-nano, the canonical form's fields
+        return wrap(
+            ["null" if v is None else f'{{"months":{v[0]},"days":{v[1]},"nanoseconds":{v[2]}}}' for v in arr.to_pylist()]
+        )
     if pa.types.is_boolean(t):
         return wrap(["null" if v is None else ("true" if v else "false") for v in arr.to_pylist()])
     if pa.types.is_integer(t):
@@ -104,6 +111,9 @@ def values(arr: pa.Array, file_type: pa.DataType) -> list:
         return wrap(["null" if v is None else _string(v) for v in arr.to_pylist()])
     if pa.types.is_binary(t) or pa.types.is_large_binary(t) or pa.types.is_fixed_size_binary(t) or pa.types.is_binary_view(t):
         return wrap(["null" if v is None else _string(base64.b64encode(v).decode()) for v in arr.to_pylist()])
+    if pa.types.is_interval(t):
+        # not in the testdata format (no vector has one): months, days and nanoseconds
+        return wrap(["null" if v is None else f"[{v.months},{v.days},{v.nanoseconds}]" for v in arr.to_pylist()])
     raise AssertionError(f"no canonical form for {t}")
 
 
@@ -118,3 +128,15 @@ def lines(table: pa.Table, file_schema: pa.Schema) -> str:
     for r in range(table.num_rows):
         out.append("{" + ",".join(f"{n}:{c[r]}" for n, c in columns) + "}\n")
     return "".join(out)
+
+
+def rows_of(table: pa.Table) -> list:
+    """The canonical text of every row of a DuckDB result, bit for bit (floats by their bits),
+    in order; sort it to compare rows in any order."""
+    columns = []
+    for col in table.columns:
+        arr = col.combine_chunks() if col.num_chunks != 1 else col.chunk(0)
+        if isinstance(arr, pa.ChunkedArray):
+            arr = pa.concat_arrays(arr.chunks) if arr.num_chunks else pa.array([], arr.type)
+        columns.append(values(arr, arr.type.storage_type if isinstance(arr.type, pa.ExtensionType) else arr.type))
+    return ["[" + ",".join(c[r] for c in columns) + "]" for r in range(table.num_rows)]

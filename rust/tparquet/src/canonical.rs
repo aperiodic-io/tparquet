@@ -5,7 +5,7 @@ use crate::error::{Result, invalid};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, RecordBatch};
-use arrow_schema::{DataType, Fields, TimeUnit};
+use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
 use base64::Engine as _;
 use std::fmt::Write as _;
 
@@ -93,6 +93,17 @@ fn write_value(a: &dyn Array, i: usize, out: &mut String) -> Result<()> {
         DataType::Duration(TimeUnit::Millisecond) => int::<DurationMillisecondType>(a, i, out),
         DataType::Duration(TimeUnit::Microsecond) => int::<DurationMicrosecondType>(a, i, out),
         DataType::Duration(TimeUnit::Nanosecond) => int::<DurationNanosecondType>(a, i, out),
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            interval(i64::from(a.as_primitive::<IntervalYearMonthType>().value(i)), 0, 0, out)
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let v = a.as_primitive::<IntervalDayTimeType>().value(i);
+            interval(0, v.days.into(), i64::from(v.milliseconds) * 1_000_000, out)
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let v = a.as_primitive::<IntervalMonthDayNanoType>().value(i);
+            interval(v.months.into(), v.days.into(), v.nanoseconds, out)
+        }
         DataType::Decimal32(..) => int::<Decimal32Type>(a, i, out),
         DataType::Decimal64(..) => int::<Decimal64Type>(a, i, out),
         DataType::Decimal128(..) => int::<Decimal128Type>(a, i, out),
@@ -107,6 +118,8 @@ fn write_value(a: &dyn Array, i: usize, out: &mut String) -> Result<()> {
         DataType::List(_) => write_list(a.as_list::<i32>().value(i).as_ref(), out)?,
         DataType::LargeList(_) => write_list(a.as_list::<i64>().value(i).as_ref(), out)?,
         DataType::FixedSizeList(..) => write_list(a.as_fixed_size_list().value(i).as_ref(), out)?,
+        DataType::ListView(_) => write_list(a.as_list_view::<i32>().value(i).as_ref(), out)?,
+        DataType::LargeListView(_) => write_list(a.as_list_view::<i64>().value(i).as_ref(), out)?,
         DataType::Struct(fields) => write_row(fields, a.as_struct().columns(), i, out)?,
         DataType::Map(..) => {
             let entries = a.as_map().value(i);
@@ -120,13 +133,18 @@ fn write_value(a: &dyn Array, i: usize, out: &mut String) -> Result<()> {
             out.push(']');
         }
         DataType::Dictionary(..) => {
-            let d = a.as_any_dictionary();
-            let key = d.normalized_keys()[i];
-            write_value(d.values().as_ref(), key, out)?;
+            // the key of row `i` alone: `normalized_keys` converts every key of its array
+            let key = a.slice(i, 1).as_any_dictionary().normalized_keys()[0];
+            write_value(a.as_any_dictionary().values().as_ref(), key, out)?;
         }
         t => return Err(invalid(format!("canonical JSON does not support {t}"))),
     }
     Ok(())
+}
+
+/// Every interval type as months, days and nanoseconds.
+fn interval(months: i64, days: i64, nanoseconds: i64, out: &mut String) {
+    write!(out, "{{\"months\":{months},\"days\":{days},\"nanoseconds\":{nanoseconds}}}").expect("write to String");
 }
 
 fn write_b64(b: &[u8], out: &mut String) {
@@ -152,7 +170,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_array::*;
-    use arrow_buffer::{OffsetBuffer, i256};
+    use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer, i256};
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
 
@@ -262,6 +280,23 @@ mod tests {
             None,
         );
         assert_eq!(one(Arc::new(fixed)), ["[6,7]"]);
+        // list views (testdata/README.md: lists of any kind), whose views may overlap
+        let view = ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int64, true)),
+            ScalarBuffer::from(vec![1, 0, 0]),
+            ScalarBuffer::from(vec![2, 3, 0]),
+            Arc::new(Int64Array::from(vec![Some(8), None, Some(9)])),
+            Some(NullBuffer::from(vec![true, true, false])),
+        );
+        assert_eq!(one(Arc::new(view)), ["[null,9]", "[8,null,9]", "null"]);
+        let large_view = LargeListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int8, false)),
+            ScalarBuffer::from(vec![0i64]),
+            ScalarBuffer::from(vec![1i64]),
+            Arc::new(Int8Array::from(vec![3])),
+            None,
+        );
+        assert_eq!(one(Arc::new(large_view)), ["[3]"]);
 
         let s = StructArray::from(vec![
             (Arc::new(Field::new("b", DataType::Int32, false)), Arc::new(Int32Array::from(vec![1])) as ArrayRef),
@@ -285,6 +320,44 @@ mod tests {
     }
 
     #[test]
+    fn dictionaries_of_every_key_type() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]));
+        let keys = [Some(2), Some(0), None, Some(1), Some(2)];
+        let want = ["\"c\"", "\"a\"", "null", "null", "\"c\""];
+        macro_rules! check {
+            ($($t:ty),*) => {$(
+                let k = PrimitiveArray::<$t>::from_iter(keys.iter().map(|k: &Option<u8>| k.map(|k| (k as i8).try_into().unwrap())));
+                assert_eq!(one(Arc::new(DictionaryArray::<$t>::new(k, values.clone()))), want, stringify!($t));
+            )*};
+        }
+        check!(Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type);
+        // a slice: keys are taken at the slice's offset
+        let d = DictionaryArray::<Int32Type>::new(Int32Array::from(vec![0, 2, 0, 2]), values.clone());
+        assert_eq!(one(Arc::new(d.slice(1, 2))), ["\"c\"", "\"a\""]);
+        // a list of dictionary values
+        let d = DictionaryArray::<UInt16Type>::new(UInt16Array::from(vec![2, 0, 2]), values);
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(d.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([1, 2]),
+            Arc::new(d),
+            None,
+        );
+        assert_eq!(one(Arc::new(list)), ["[\"c\"]", "[\"a\",\"c\"]"]);
+    }
+
+    #[test]
+    fn dictionaries_take_linear_time() {
+        // one value per row, not all the keys for each row (which was quadratic)
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let keys = Int32Array::from_iter_values((0..300_000).map(|i| i % 3));
+            let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+            tx.send(one(Arc::new(DictionaryArray::<Int32Type>::new(keys, values))).len()).unwrap();
+        });
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(60)), Ok(300_000));
+    }
+
+    #[test]
     fn rows_are_objects_in_schema_order() {
         let schema = Schema::new(vec![Field::new("z", DataType::Int32, false), Field::new("a", DataType::Utf8, true)]);
         let b = RecordBatch::try_new(
@@ -298,10 +371,46 @@ mod tests {
     }
 
     #[test]
+    fn intervals_are_months_days_and_nanoseconds() {
+        use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+        assert_eq!(
+            one(Arc::new(IntervalYearMonthArray::from(vec![Some(14), Some(-1), None]))),
+            ["{\"months\":14,\"days\":0,\"nanoseconds\":0}", "{\"months\":-1,\"days\":0,\"nanoseconds\":0}", "null"]
+        );
+        assert_eq!(
+            one(Arc::new(IntervalDayTimeArray::from(vec![
+                IntervalDayTime::new(3, 1500),
+                IntervalDayTime::new(i32::MIN, i32::MAX),
+            ]))),
+            [
+                "{\"months\":0,\"days\":3,\"nanoseconds\":1500000000}",
+                "{\"months\":0,\"days\":-2147483648,\"nanoseconds\":2147483647000000}"
+            ]
+        );
+        assert_eq!(
+            one(Arc::new(IntervalMonthDayNanoArray::from(vec![
+                IntervalMonthDayNano::new(1, -2, 3),
+                IntervalMonthDayNano::new(i32::MAX, i32::MIN, i64::MIN),
+            ]))),
+            [
+                "{\"months\":1,\"days\":-2,\"nanoseconds\":3}",
+                "{\"months\":2147483647,\"days\":-2147483648,\"nanoseconds\":-9223372036854775808}"
+            ]
+        );
+        // the same interval in any interval type has the same form
+        assert_eq!(
+            one(Arc::new(IntervalDayTimeArray::from(vec![IntervalDayTime::new(2, 7)]))),
+            one(Arc::new(IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(0, 2, 7_000_000)])))
+        );
+    }
+
+    #[test]
     fn unsupported_types_are_errors() {
-        let a: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![1]));
+        let a: ArrayRef =
+            Arc::new(RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1]), &Int64Array::from(vec![5])).unwrap());
         let schema = Schema::new(vec![Field::new("v", a.data_type().clone(), true)]);
         let b = RecordBatch::try_new(Arc::new(schema), vec![a]).unwrap();
-        assert_eq!(batch_lines(&b).unwrap_err().to_string(), "canonical JSON does not support Interval(YearMonth)");
+        let err = batch_lines(&b).unwrap_err().to_string();
+        assert!(err.starts_with("canonical JSON does not support RunEndEncoded"), "{err}");
     }
 }

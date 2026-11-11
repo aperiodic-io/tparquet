@@ -41,6 +41,7 @@ def write_parquet(
     # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
     base: str = "zstd(3)",  # pragma: no mutate
     row_group_size: int | None = None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Writes a DataFrame (or the result of a LazyFrame) with PCODEC where the policy selects
     it; the options are those of `tparquet.write_table`. Returns the codec of every
@@ -49,7 +50,16 @@ def write_parquet(
         df = df.collect()
     if not isinstance(df, pl.DataFrame):
         raise TypeError(f"expected a Polars DataFrame or LazyFrame, got {type(df).__name__}")
-    return write_table(df, sink, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size)
+    return write_table(
+        df,
+        sink,
+        policy=policy,
+        columns=columns,
+        level=level,
+        base=base,
+        row_group_size=row_group_size,
+        encodings=encodings,
+    )
 
 
 def _get(node: Any, *keys: str) -> Any:
@@ -180,15 +190,50 @@ def _test(node: Any, schema: pl.Schema) -> Callable[[dict[str, tuple[int, int]]]
     return None
 
 
+def _same_values(dtype: pl.DataType, stored: str) -> bool:
+    """Whether a Polars column of `dtype` holds the integers a column stored as `stored`
+    (`ParquetFile._column_bounds`) has: Polars reads `timestamp[s]` in milliseconds."""
+    if isinstance(dtype, pl.Datetime):
+        return stored == f"timestamp[{dtype.time_unit}]" or (stored == "date64" and dtype.time_unit == "ms")
+    if dtype == pl.Date:
+        return stored == "date32"
+    return stored == "int"
+
+
 def _row_groups(f: ParquetFile, predicate: pl.Expr, schema: pl.Schema) -> list[int]:
     """The row groups whose statistics do not rule `predicate` out."""
-    bounds = f.integer_bounds()
+    stored, column_bounds = f._column_bounds()
+    usable = {name for name, kind in stored.items() if _same_values(schema[name], kind)}
+    bounds = [{name: b for name, b in rg.items() if name in usable} for rg in column_bounds]
     try:
         tree = json.loads(predicate.meta.serialize(format="json"))
     except Exception:  # the serialized form is not a stable Polars API: then prune nothing
         return list(range(len(bounds)))
     test = _test(tree, schema)
     return [i for i, b in enumerate(bounds) if test is None or test(b)]
+
+
+def _plan(
+    f: ParquetFile, predicate: pl.Expr | None, schema: pl.Schema, n_rows: int | None
+) -> tuple[list[int] | None, int | None]:
+    """The row groups to read and the most rows to read from them: the first `n_rows` rows
+    of the file (Polars means the limit before the predicate), less the row groups whose
+    statistics rule `predicate` out. A skipped row group still takes its part of the limit."""
+    if predicate is None:
+        return None, n_rows
+    kept = _row_groups(f, predicate, schema)
+    if n_rows is None:
+        return kept, None
+    groups: list[int] = []
+    limit = 0
+    left = n_rows
+    for i, rows in enumerate(f.metadata.row_group_rows):
+        take = min(rows, left)
+        left -= take
+        if take and i in kept:
+            groups.append(i)
+            limit += take
+    return groups, limit
 
 
 #: Rows per batch when neither the caller nor the engine asks for a size.
@@ -206,22 +251,14 @@ def _source(
         columns = with_columns
         if columns is not None and predicate is not None:
             columns = list(dict.fromkeys([*columns, *predicate.meta.root_names()]))
-        row_groups = None if predicate is None else _row_groups(f, predicate, schema)
-        # a limit on matching rows cannot go to the reader
-        limit = n_rows if predicate is None else None
-        left = n_rows
+        row_groups, limit = _plan(f, predicate, schema, n_rows)
         for batch in f.stream(columns, row_groups, batch_size or hint or DEFAULT_BATCH_SIZE, limit):
             df = pl.DataFrame(batch)
             if predicate is not None:
                 df = df.filter(predicate)
             if with_columns is not None:
                 df = df.select(with_columns)
-            if left is not None:
-                df = df.head(left)
-                left -= df.height
             yield df
-            if left == 0:
-                return
 
     return source
 

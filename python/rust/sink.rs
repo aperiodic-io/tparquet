@@ -8,7 +8,10 @@ use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 
 pub enum Sink {
-    File(BufWriter<File>),
+    File {
+        file: BufWriter<File>,
+        path: PathBuf,
+    },
     /// A binary file-like object; the exception it raises is kept in `pending`.
     Python {
         obj: Py<PyAny>,
@@ -19,12 +22,22 @@ pub enum Sink {
 impl Sink {
     /// A sink for `target`: a `str` path (created or truncated) or a file-like object.
     pub fn new(target: &Bound<'_, PyAny>, pending: &Pending) -> PyResult<Self> {
-        if let Ok(path) = target.cast::<PyString>() {
-            let path = PathBuf::from(path.to_str()?);
+        if target.is_instance_of::<PyString>() {
+            // through the file system encoding: a name that is not UTF-8 is a `str` with
+            // surrogate escapes
+            let path: PathBuf = target.extract()?;
             let file = File::create(&path).map_err(|e| os_error(&e, &path))?;
-            return Ok(Self::File(BufWriter::with_capacity(1 << 20, file)));
+            return Ok(Self::File { file: BufWriter::with_capacity(1 << 20, file), path });
         }
         Ok(Self::Python { obj: target.clone().unbind(), pending: pending.clone() })
+    }
+
+    /// The file the sink created, if it is one.
+    pub fn path(&self) -> Option<PathBuf> {
+        match self {
+            Self::File { path, .. } => Some(path.clone()),
+            Self::Python { .. } => None,
+        }
     }
 }
 
@@ -39,7 +52,7 @@ fn call<T>(pending: &Pending, f: impl FnOnce(Python<'_>) -> PyResult<T>) -> io::
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
-            Self::File(f) => f.write(buf),
+            Self::File { file, .. } => file.write(buf),
             Self::Python { obj, pending } => call(pending, |py| {
                 let n = obj.call_method1(py, "write", (PyBytes::new(py, buf),))?;
                 // `None` from a file object that does not count (`RawIOBase` returns a count)
@@ -50,7 +63,7 @@ impl Write for Sink {
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
-            Self::File(f) => f.flush(),
+            Self::File { file, .. } => file.flush(),
             Self::Python { obj, pending } => call(pending, |py| {
                 let obj = obj.bind(py);
                 if obj.hasattr("flush")? {

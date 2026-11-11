@@ -30,15 +30,16 @@ Measured on the sample and preview data of four market data providers: Aperiodic
 Crypto Lake and NYSE, 151M rows in 31 datasets. The baseline is Parquet with ZSTD level 9,
 written two ways: with the writer's defaults, and *tuned*, with the best encoding chosen per
 column (DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT, DELTA_BYTE_ARRAY, ...), as the providers' own
-files are.
+files are. A third baseline, *ALP*, is the tuned file with Parquet's new ALP encoding on every
+floating-point column.
 
-| Data | Rows | ZSTD(9) | ZSTD(9) tuned | tparquet | vs ZSTD(9) | vs tuned |
-|---|---:|---:|---:|---:|---:|---:|
-| Trades (crypto perps and spot, US equities) | 138.9M | 737.0 MB | 520.0 MB | 362.2 MB | 0.49× | 0.70× |
-| Quotes (top of book) | 6.8M | 80.6 MB | 63.3 MB | 51.0 MB | 0.63× | 0.81× |
-| Order books (L2 snapshots and updates) | 5.5M | 126.4 MB | 109.2 MB | 58.6 MB | 0.46× | 0.54× |
-| Bars, metrics, derivatives | 288K | 13.1 MB | 8.2 MB | 6.8 MB | 0.52× | 0.83× |
-| **All** | 151.5M | 957.1 MB | 700.7 MB | 478.6 MB | **0.50×** | **0.68×** |
+| Data | Rows | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | vs ZSTD(9) | vs tuned | vs ALP |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Trades (crypto perps and spot, US equities) | 138.9M | 737.0 MB | 520.0 MB | 480.6 MB | 362.2 MB | 0.49× | 0.70× | 0.75× |
+| Quotes (top of book) | 6.8M | 80.6 MB | 63.3 MB | 63.3 MB | 51.0 MB | 0.63× | 0.81× | 0.81× |
+| Order books (L2 snapshots and updates) | 5.5M | 126.4 MB | 109.2 MB | 95.7 MB | 58.6 MB | 0.46× | 0.54× | 0.61× |
+| Bars, metrics, derivatives | 288K | 13.1 MB | 8.2 MB | 10.0 MB | 6.8 MB | 0.52× | 0.83× | 0.68× |
+| **All** | 151.5M | 957.1 MB | 700.7 MB | 649.5 MB | 478.6 MB | **0.50×** | **0.68×** | **0.74×** |
 
 Every value comes back bit for bit, and tparquet is smaller on every one of the 31 datasets.
 It chooses PCODEC or ZSTD per column, on the first batch: here 478 of the 480 numeric columns
@@ -46,9 +47,9 @@ got PCODEC. Strings and flags keep ZSTD.
 
 If your files compress like these trades, 1 TB of ZSTD(9) Parquet becomes about 490 GB (about
 700 GB if your writer already tunes its encodings), and a full scan reads half the bytes. On
-one thread, tparquet writes at 109 MB/s of Arrow data (ZSTD(9): 104, tuned: 155) and reads at
-925 MB/s (ZSTD(9): 1,031, tuned: 1,225). On wide order books, where every column is PCODEC, it
-writes about 3× slower and reads at two thirds of ZSTD(9)'s speed.
+one thread, tparquet writes at 102 MB/s of Arrow data (ZSTD(9): 97, tuned: 141, ALP: 169) and
+reads at 924 MB/s (ZSTD(9): 916, tuned: 1,129, ALP: 1,231). On wide order books, where every
+column is PCODEC, it writes about 3× slower than ALP and reads at 0.81× of ZSTD(9)'s speed.
 
 Every dataset, with its write and read speeds, is in [`bench/RESULTS.md`](bench/RESULTS.md).
 `make bench` reproduces it (it downloads about 1.2 GB). The quickest way to find out what
@@ -82,6 +83,18 @@ and `tparquet verify` confirms it holds the same values.
 
 The codec is specified in [`spec/FORMAT.md`](spec/FORMAT.md), so anyone can implement it.
 
+## Where it fits: a storage tier
+
+Until PCODEC is a standard Parquet codec, use tparquet where you control every reader, and
+write standard Parquet wherever data leaves: keep the history, the archive or your own copy
+of vendor data in tparquet, and `tparquet decode` (or `transcode`) at the edge for customers,
+other teams, managed warehouses and BI tools. [`docs/STORAGE-TIER.md`](docs/STORAGE-TIER.md)
+has the recipes, and the cases where it does not pay.
+
+Making PCODEC a standard codec, so that any Parquet reader can open these files, is the
+proposal in [`spec/UPSTREAM.md`](spec/UPSTREAM.md): what would change in `parquet.thrift`,
+the evidence, and the work still needed before it goes to the Apache Parquet community.
+
 ## Install
 
 The packages are not on PyPI or crates.io yet. Build them from a checkout of this repository
@@ -92,7 +105,7 @@ steps for each use case on Linux, macOS and Windows, using the packages from you
 ```sh
 cargo install --path rust/tparquet           # CLI
 pip install ./python ./polars-tparquet       # Python, pandas, Polars, DuckDB (Python 3.10+)
-make -C duckdb build                         # DuckDB extension: duckdb/build/tparquet.duckdb_extension
+make -C duckdb build                         # DuckDB extension: duckdb/build/v{1.5.6,2.0.0}/tparquet.duckdb_extension
 cargo build --release -p tparquet-capi       # static library for Go; see go/README.md
 make -C java install                         # Java, Spark: the parquet-java fork; see java/README.md
 make -C java spark-jars                      # the jars a Spark 4.3 distribution needs
@@ -126,7 +139,7 @@ DuckDB:
 ```sql
 LOAD 'tparquet.duckdb_extension';
 SELECT symbol, avg(price) FROM read_tparquet('trades/*.parquet') GROUP BY ALL;
-COPY (SELECT ts, price, qty FROM ticks) TO 'ticks.parquet' (FORMAT tparquet, COLUMN_NAMES ['ts', 'price', 'qty']);
+COPY (SELECT ts, price, qty FROM ticks) TO 'ticks.parquet' (FORMAT tparquet);
 ```
 
 Go, on arrow-go with no fork:
@@ -202,7 +215,8 @@ Use plain ZSTD Parquet when the files must be read by tools you don't control.
 - Every implementation reads the same conformance vectors in [`testdata/`](testdata/README.md):
   Parquet files with their expected rows in canonical JSON, and page payloads with their decoded
   bytes.
-- Rust, Go, Python, DuckDB, Java, C++ and DataFusion each read the files all of them wrote
+- Rust, Go, Python, DuckDB, Java, C++ and DataFusion each read the files all of them wrote,
+  including Python, DuckDB and the Rust CLI under each policy and in many row groups
   ([`acceptance/cross/run.sh`](acceptance/cross/run.sh)), on every pull request; Spark and
   Trino read every vector exactly as they read a standard copy of the same rows.
 - Every package is mutation tested: cargo-mutants for Rust (including the forks' changed
@@ -227,7 +241,7 @@ Use plain ZSTD Parquet when the files must be read by tools you don't control.
 | C | [`rust/capi`](rust/capi) | C ABI over the core ([`tparquet.h`](rust/capi/include/tparquet.h)) |
 | Go | [`go/`](go) | arrow-go codec plugin (no fork: `compress.RegisterCodec`) and writer helpers |
 | Python, pandas, Polars | [`python/`](python) | pyo3 package: `read_table`, `write_table`, `Writer`; `tparquet.pandas`, `tparquet.polars` (`scan_parquet` with pushdown), `tparquet.duckdb` |
-| DuckDB | [`duckdb/`](duckdb) | loadable extension: `read_tparquet(...)`, `COPY ... (FORMAT tparquet)` |
+| DuckDB | [`duckdb/`](duckdb) | DuckDB's own parquet extension with PCODEC (a patch over DuckDB 1.5.6 and 2.0.0): `read_tparquet(...)`, `COPY ... (FORMAT tparquet)` |
 | Java, anything on parquet-java | [`java/`](java) | a small fork of parquet-java 1.17.0 (`parquet-format-structures`, `parquet-common`, `parquet-hadoop`; [`FORK.md`](java/parquet-java/FORK.md)), the codec over JNI ([`tparquet-jni`](java/tparquet-jni), [`rust/jni`](rust/jni)), and [`tparquet`](java/tparquet): `TparquetWriter`, `TparquetReader`, canonical rows |
 | Spark | [`java/tparquet-spark`](java/tparquet-spark) | Spark 4.3 reads PCODEC through the parquet-java fork (every reader); the `tparquet` data source writes it ([Java README](java/README.md#spark)) |
 | DataFusion | [`datafusion/`](datafusion) | DataFusion 55.2 (arrow-rs 59) on a fork of the `parquet` crate 59.3.2 ([`FORK.md`](datafusion/parquet/FORK.md)): `STORED AS TPARQUET`, `COPY`/`INSERT` writing PCODEC; `STORED AS PARQUET` and `read_parquet` read PCODEC files, with pruning |
@@ -243,7 +257,7 @@ make check            # Rust: fmt, clippy, tests, C smoke test, fork check, vect
 make -C go test       # Go
 make python-test      # Python (uv, Python 3.14)
 make polars-test      # the Polars plugin
-make -C duckdb sql    # DuckDB extension
+make -C duckdb test   # DuckDB extension
 make java-test        # Java, the parquet-java fork, Spark (JDK 21, Maven)
 make trino-test       # Trino: the trino-parquet fork, conformance, queries through the Hive connector
 make datafusion-test  # DataFusion and its parquet 59.3.2 fork

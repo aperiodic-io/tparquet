@@ -65,6 +65,24 @@ var compressFn = cCompress
 
 type codec struct{}
 
+// abiErr is why the linked library cannot be used, or nil. It is checked once, when the
+// package is initialized, and returned (or, where arrow-go's interface has no error, raised as
+// a panic) by every codec call and by NewPlan and NewFileWriter, before the library is called:
+// a library of another ABI version may not lay out its arguments as this package does.
+//
+// The check does not panic at init: importing the package registers the codec, so a panic
+// would stop every program that imports it, even one that never meets a PCODEC column, and
+// before main could report anything.
+var abiErr = checkABI(linkedABIVersion(), abiVersion)
+
+// checkABI compares the ABI version of the linked library with the one this package needs.
+func checkABI(linked, want uint32) error {
+	if linked != want {
+		return fmt.Errorf("pcodec: the linked libtparquet_capi has ABI version %d, this package needs %d: build the library from the same tparquet release", linked, want)
+	}
+	return nil
+}
+
 func init() {
 	compress.RegisterCodec(Compression, codec{})
 }
@@ -81,8 +99,13 @@ func (c codec) Encode(dst, src []byte) []byte {
 //
 // The interface has no error return. The library fails only on bad arguments, which this
 // binding never passes, or on an internal error; in either case EncodeLevel writes a RAW
-// payload (the input verbatim, spec section 4.1), which every reader decodes.
+// payload (the input verbatim, spec section 4.1), which every reader decodes. A linked library
+// of another ABI version is not called at all: EncodeLevel panics with that error, as Decode
+// does, rather than write a file without the compression asked for.
 func (codec) EncodeLevel(dst, src []byte, level int) []byte {
+	if abiErr != nil {
+		panic(abiErr)
+	}
 	bound := len(src) + 2
 	if cap(dst) < bound {
 		dst = make([]byte, bound)
@@ -115,6 +138,9 @@ func (c codec) Decode(dst, src []byte) []byte {
 // (the page's uncompressed size, minus the levels for a V2 page): the payload is rejected
 // if it decodes to any other size. arrow-go sizes dst that way for every page type.
 func (codec) DecodeWithError(dst, src []byte) ([]byte, error) {
+	if abiErr != nil {
+		return nil, abiErr
+	}
 	if err := cDecompress(dst, src); err != nil {
 		return nil, err
 	}

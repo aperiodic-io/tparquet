@@ -88,6 +88,9 @@ pub fn inspect<R: ChunkReader>(reader: &R) -> Result<FileReport> {
             modes: BTreeMap::new(),
         })
         .collect();
+    // the column chunks of a valid file are disjoint: reading more bytes than the file
+    // holds means the footer points several chunks at the same bytes (bounded work)
+    let mut budget = reader.len();
     for rg in metadata.row_groups() {
         for (report, chunk) in columns.iter_mut().zip(rg.columns()) {
             let codec = codec_name(chunk.compression());
@@ -96,7 +99,7 @@ pub fn inspect<R: ChunkReader>(reader: &R) -> Result<FileReport> {
             }
             report.compressed_bytes += chunk.compressed_size();
             report.uncompressed_bytes += chunk.uncompressed_size();
-            scan_pages(reader, chunk, report)?;
+            scan_pages(reader, chunk, report, &mut budget)?;
         }
     }
     let pcodec_version = file
@@ -106,7 +109,13 @@ pub fn inspect<R: ChunkReader>(reader: &R) -> Result<FileReport> {
     Ok(FileReport { rows: file.num_rows(), row_groups: metadata.num_row_groups(), pcodec_version, columns })
 }
 
-fn scan_pages<R: ChunkReader>(reader: &R, chunk: &ColumnChunkMetaData, report: &mut ColumnReport) -> Result<()> {
+/// Counts the pages of `chunk` into `report`; `budget` is the number of bytes left to read.
+fn scan_pages<R: ChunkReader>(
+    reader: &R,
+    chunk: &ColumnChunkMetaData,
+    report: &mut ColumnReport,
+    budget: &mut u64,
+) -> Result<()> {
     let bad = || invalid(format!("column {}: bad column chunk offsets", report.path));
     let start = chunk.dictionary_page_offset().unwrap_or(chunk.data_page_offset());
     let start = u64::try_from(start).map_err(|_| bad())?;
@@ -114,6 +123,9 @@ fn scan_pages<R: ChunkReader>(reader: &R, chunk: &ColumnChunkMetaData, report: &
     if start.checked_add(len as u64).is_none_or(|end| end > reader.len()) {
         return Err(bad());
     }
+    *budget = budget
+        .checked_sub(len as u64)
+        .ok_or_else(|| invalid(format!("column {}: the column chunks add up to more than the file", report.path)))?;
     let bytes = reader.get_bytes(start, len)?;
     let pcodec = matches!(chunk.compression(), Compression::PCODEC(_));
     let mut pos = 0;
@@ -216,28 +228,36 @@ impl<'a> Compact<'a> {
     /// Calls `field(self, id, type)` for each field of a struct; it returns whether it read
     /// the value, else the value is skipped.
     fn read_struct(&mut self, mut field: impl FnMut(&mut Self, i16, u8) -> Parse<bool>) -> Parse<()> {
+        self.nested(|p| {
+            let mut last: i16 = 0;
+            loop {
+                let b = p.byte()?;
+                if b == 0 {
+                    return Ok(());
+                }
+                let t = b & 0x0f;
+                let delta = i16::from(b >> 4);
+                let id = if delta == 0 {
+                    i16::try_from(p.zigzag()?).map_err(|_| "field id out of range")?
+                } else {
+                    last.checked_add(delta).ok_or("field id out of range")?
+                };
+                last = id;
+                if !field(p, id, t)? {
+                    p.skip(t)?;
+                }
+            }
+        })
+    }
+
+    /// Reads a struct, list, set or map with `f`, one level deeper: containers nest at most
+    /// `MAX_DEPTH` deep, so the recursion is bounded.
+    fn nested(&mut self, f: impl FnOnce(&mut Self) -> Parse<()>) -> Parse<()> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             return Err("nested too deep".into());
         }
-        let mut last: i16 = 0;
-        loop {
-            let b = self.byte()?;
-            if b == 0 {
-                break;
-            }
-            let t = b & 0x0f;
-            let delta = i16::from(b >> 4);
-            let id = if delta == 0 {
-                i16::try_from(self.zigzag()?).map_err(|_| "field id out of range")?
-            } else {
-                last.checked_add(delta).ok_or("field id out of range")?
-            };
-            last = id;
-            if !field(self, id, t)? {
-                self.skip(t)?;
-            }
-        }
+        f(self)?;
         self.depth -= 1;
         Ok(())
     }
@@ -252,26 +272,26 @@ impl<'a> Compact<'a> {
                 let n = usize::try_from(self.varint()?).map_err(|_| "length out of range")?;
                 self.take(n)
             }
-            9 | 10 => {
-                let h = self.byte()?;
+            9 | 10 => self.nested(|p| {
+                let h = p.byte()?;
                 let n = match h >> 4 {
-                    15 => self.varint()?,
+                    15 => p.varint()?,
                     n => u64::from(n),
                 };
-                self.elements(h & 0x0f, n)
-            }
-            11 => {
-                let n = self.varint()?;
+                p.elements(h & 0x0f, n)
+            }),
+            11 => self.nested(|p| {
+                let n = p.varint()?;
                 if n == 0 {
                     return Ok(());
                 }
-                let kv = self.byte()?;
+                let kv = p.byte()?;
                 for _ in 0..n {
-                    self.element(kv >> 4)?;
-                    self.element(kv & 0x0f)?;
+                    p.element(kv >> 4)?;
+                    p.element(kv & 0x0f)?;
                 }
                 Ok(())
-            }
+            }),
             12 => self.read_struct(|_, _, _| Ok(false)),
             t => Err(format!("unknown field type {t}")),
         }
@@ -461,6 +481,40 @@ mod tests {
     }
 
     #[test]
+    fn nested_containers_are_bounded() {
+        // a list of lists of lists ... (a few bytes per level): the depth limit applies to
+        // lists, sets and maps as to structs, and the parser never overflows the stack
+        // field 4 holds `levels + 1` nested containers: lists or sets of one element, the
+        // innermost empty; or maps of one entry whose key is the next map and whose value an
+        // i32 (0), the innermost empty
+        let header = |levels: usize, container: u8| {
+            let mut b = vec![0x15, 0, 0x15, 0, 0x15, 0, 0x40 | container];
+            if container == 11 {
+                b.extend([1, 0xb5].repeat(levels));
+                b.push(0);
+                b.extend(vec![0; levels]);
+            } else {
+                b.extend(vec![0x10 | container; levels]);
+                b.push(0x05);
+            }
+            b.push(0);
+            b
+        };
+        for t in [9, 10, 11] {
+            let deep = header(1_000_000, t);
+            assert_eq!(Compact::new(&deep).page_header().unwrap_err(), "nested too deep", "{t}");
+            let ok = header(MAX_DEPTH - 2, t);
+            assert!(Compact::new(&ok).page_header().is_ok(), "{t}");
+        }
+        // a list of structs counts both
+        let mut b = vec![0x15, 0, 0x15, 0, 0x15, 0, 0x19];
+        for _ in 0..MAX_DEPTH {
+            b.extend([0x1c, 0x19]);
+        }
+        assert_eq!(Compact::new(&b).page_header().unwrap_err(), "nested too deep");
+    }
+
+    #[test]
     fn empty_map_and_field_id_overflow() {
         // an empty map, then field ids that overflow i16 by delta
         let b = [0x15, 0, 0x15, 0, 0x15, 0, 0x1b, 0, 0];
@@ -519,17 +573,22 @@ mod tests {
         let n = page.len() as i64;
         let mut r = report("x");
         // a chunk that ends exactly at the end of the input is fine
-        scan_pages(&page, &chunk(0, n), &mut r).unwrap();
+        let mut budget = n as u64;
+        scan_pages(&page, &chunk(0, n), &mut r, &mut budget).unwrap();
+        assert_eq!(budget, 0);
+        // a second chunk over the same bytes is over budget
+        let err = scan_pages(&page, &chunk(0, 1), &mut r, &mut budget).unwrap_err();
+        assert_eq!(err.to_string(), "column x: the column chunks add up to more than the file");
         assert_eq!(r.pages["DATA_PAGE"], 1);
         assert_eq!(r.modes["RAW"], 1);
         for (offset, len) in [(0, n + 1), (1, n), (-1, 2), (0, -1), (i64::MAX, 1)] {
-            let err = scan_pages(&page, &chunk(offset, len), &mut report("x")).unwrap_err();
+            let err = scan_pages(&page, &chunk(offset, len), &mut report("x"), &mut { u64::MAX }).unwrap_err();
             assert_eq!(err.to_string(), "column x: bad column chunk offsets", "{offset} {len}");
         }
         // a page that runs past its chunk, a broken header
-        let err = scan_pages(&page, &chunk(0, n - 1), &mut report("x")).unwrap_err();
+        let err = scan_pages(&page, &chunk(0, n - 1), &mut report("x"), &mut { u64::MAX }).unwrap_err();
         assert_eq!(err.to_string(), "column x: page runs past the column chunk");
-        let err = scan_pages(&page, &chunk(1, n - 1), &mut report("x")).unwrap_err();
+        let err = scan_pages(&page, &chunk(1, n - 1), &mut report("x"), &mut { u64::MAX }).unwrap_err();
         assert!(err.to_string().starts_with("column x: page header: "), "{err}");
     }
 

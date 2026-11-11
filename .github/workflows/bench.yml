@@ -3,7 +3,29 @@ name: bench
 on:
   push:
     branches: [main]
+    paths:
+      - "bench/**"
+      - "python/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/bench.yml"
   pull_request:
+    paths:
+      - "bench/**"
+      - "python/**"
+      - "rust/core/**"
+      - "rust/parquet/**"
+      - "rust/tparquet/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "testdata/**"
+      - ".cargo/**"
+      - ".github/workflows/bench.yml"
   workflow_dispatch:
 
 permissions:

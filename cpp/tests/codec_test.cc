@@ -79,7 +79,7 @@ std::string Compress(Codec& codec, const std::string& src) {
 
 TEST(Codec, EveryPayloadVectorDecodesAsListed) {
   const auto vectors = PayloadVectors();
-  ASSERT_GE(vectors.size(), 35u);
+  ASSERT_GE(vectors.size(), 44u);
   auto codec = MakeCodec();
   // the Parquet layer's factory returns the same codec
   auto parquet_codec = parquet::GetCodec(Compression::PCODEC);
@@ -101,8 +101,8 @@ TEST(Codec, EveryPayloadVectorDecodesAsListed) {
     }
     (v.valid ? valid : invalid)++;
   }
-  EXPECT_EQ(valid, 14);
-  EXPECT_EQ(invalid, 21);
+  EXPECT_EQ(valid, 18);
+  EXPECT_EQ(invalid, 26);
 }
 
 TEST(Codec, ValidPayloadsNeedTheirExactSize) {
@@ -212,10 +212,17 @@ TEST(Codec, ErrorsAreStatusesNotCrashes) {
   uint8_t out[16];
   // a payload too small for its header, a negative size, a negative input length
   EXPECT_TRUE(codec->Decompress(1, reinterpret_cast<const uint8_t*>("\x01"), 16, out).status().IsIOError());
-  EXPECT_TRUE(codec->Decompress(2, reinterpret_cast<const uint8_t*>("\x01\x00"), -1, out).status().IsInvalid());
-  EXPECT_TRUE(codec->Decompress(-1, out, 16, out).status().IsInvalid());
-  EXPECT_TRUE(codec->Compress(-1, out, 16, out).status().IsInvalid());
-  EXPECT_TRUE(codec->Compress(4, out, -1, out).status().IsInvalid());
+  // (the codec refuses a negative length itself, before the cast to size_t; the C ABI would
+  // refuse the huge size_t as an argument error too, so the message tells the two apart)
+  const auto negative = [](const arrow::Status& s, const std::string& message) {
+    EXPECT_TRUE(s.IsInvalid()) << s.ToString();
+    EXPECT_EQ(s.message(), message) << s.ToString();
+  };
+  negative(codec->Decompress(2, reinterpret_cast<const uint8_t*>("\x01\x00"), -1, out).status(),
+           "pcodec decompress: negative length");
+  negative(codec->Decompress(-1, out, 16, out).status(), "pcodec decompress: negative length");
+  negative(codec->Compress(-1, out, 16, out).status(), "pcodec compress: negative length");
+  negative(codec->Compress(4, out, -1, out).status(), "pcodec compress: negative length");
   // an output buffer below MaxCompressedLen is an argument error (Invalid)
   const std::string src = Doubles(100);
   std::string small(src.size(), '\0');

@@ -72,7 +72,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 # the `tparquet` namespaces are registered on DataFrame and LazyFrame at import (Polars' plugin
 # API); static checkers cannot see such attributes, so these tests skip that one check
-module = ["test_write", "test_properties"]
+module = ["test_write", "test_sink", "test_properties"]
 disable_error_code = ["attr-defined"]
 
 [tool.pytest.ini_options]

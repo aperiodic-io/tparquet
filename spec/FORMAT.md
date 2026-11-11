@@ -53,6 +53,22 @@ The decoder is always given the expected decompressed size, `uncompressed_page_s
 the level lengths for V2 pages), and MUST fail if the payload does not produce exactly that
 many bytes.
 
+### Expected size 0
+
+The codec input can be empty: the values section of a `DATA_PAGE_V2` page whose values are
+all null, or the dictionary page of a column chunk without non-null values. Such a page still
+has a payload, and a writer MUST write a valid one: one that decodes to zero bytes, such as
+RAW `01 00`, which the reference encoder writes for an empty input (section 5). A writer
+that stores such a V2 values section uncompressed (`is_compressed = false`, zero bytes) writes
+no payload at all, which is equally valid.
+
+A decoder given expected size 0 decodes the payload like any other: every valid payload that
+produces zero bytes (RAW with an empty body, PCO or DECIMAL whose pcodec file holds no
+numbers, ZSTD frames without content) MUST be accepted, and an invalid one, the empty
+(zero-byte) payload included, MUST be rejected. A Parquet reader MAY skip the codec for a page
+or values section of expected size 0 without looking at its bytes, as the arrow-rs reader
+does; a writer MUST NOT rely on that.
+
 ### Writer recommendations (ratio, not correctness)
 
 To give pcodec a plain array of numbers, a writer SHOULD, for a PCODEC column chunk:
@@ -69,7 +85,13 @@ A writer that ignores these still writes valid files; the payload falls back to 
 ## 4. Payload
 
 All integers are little-endian. `varint` is unsigned LEB128, at most 10 bytes, encoding a
-value below 2^64.
+value below 2^64: 7 bits per byte, least significant group first, the high bit of every byte
+but the last set.
+
+Encoders MUST write the minimal form, the shortest encoding of the value (only `00` for 0;
+otherwise no last byte `00`). Decoders MUST accept non-minimal forms up to 10 bytes (for
+example `80 00` and `80 80 80 80 80 80 80 80 80 00` for 0), and MUST reject a varint that does
+not end within 10 bytes, or whose tenth byte is above `01` (a value of 2^64 or more).
 
 ```
 payload := version:u8 mode:u8 body
@@ -97,7 +119,8 @@ A decoder MUST reject any other mode.
 | 5 | `DOUBLE` | 8 | `f64` |
 
 A decoder MUST reject any other dtype. `pco` is one pcodec *standalone* file (pcodec ≥ 1.0
-standalone format) that runs to the end of the payload.
+standalone format) that runs to the end of the payload: a decoder MUST reject a payload with
+any byte after the end of that file (after its footer), in PCO and DECIMAL mode alike.
 
 ### 4.1 RAW (mode 0)
 
@@ -140,14 +163,15 @@ regular `q` there (0 before the first) to keep the pcodec stream smooth.
 
 `body` is Zstandard data (RFC 8878): one frame, or several concatenated, as written by the
 Parquet `ZSTD` codec. It decodes to the expected size; a decoder MUST NOT produce more output
-than that.
+than that. An empty body holds no frame: a decoder MUST reject it, even for expected size 0.
+In ZSTD mode, zero bytes are a frame without content, such as `28 b5 2f fd 20 00 01 00 00`.
 
 ## 5. Encoder (informative)
 
 The reference encoder (`rust/core`), given input bytes, an optional type hint and a level
 0–12 (pcodec's compression level, default 8):
 
-1. Empty input → RAW.
+1. Empty input → RAW: the payload `01 00` (section 3, expected size 0).
 2. A hint with a width that divides the input length → PCO for that dtype. For `FLOAT` and
    `DOUBLE` it also tries DECIMAL: it probes the first 4096 values for the smallest exponent
    at which at least 99% of them are exact, then encodes all values, giving up if more than

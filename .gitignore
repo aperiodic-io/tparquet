@@ -8,6 +8,7 @@ rust/core/fuzz/target/
 rust/core/fuzz/corpus/
 rust/core/fuzz/artifacts/
 rust/core/fuzz/Cargo.lock
+.hypothesis/
 .jqwik-database
 .claude/worktrees/
 # the benchmark's download cache: the providers' sample files are not ours to redistribute

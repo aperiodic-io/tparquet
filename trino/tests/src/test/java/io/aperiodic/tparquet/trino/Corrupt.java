@@ -23,7 +23,11 @@ final class Corrupt
     /** Where a page's payload (the compressed part) is in the file. */
     record Payload(String column, PageType type, int offset, int length) {}
 
-    /** The payload of every page of every PCODEC column chunk of {@code file}. */
+    /**
+     * The payload of every page of every PCODEC column chunk of {@code file} that a reader decodes:
+     * not those of expected size 0 (a V2 page whose values are all null, an empty dictionary page),
+     * which Trino's reader, like arrow-rs's, does not decode (spec section 3, "Expected size 0").
+     */
     static List<Payload> payloads(Path file)
             throws IOException
     {
@@ -58,7 +62,8 @@ final class Corrupt
                         levels = v2.getRepetition_levels_byte_length() + v2.getDefinition_levels_byte_length();
                     }
                     boolean compressed = h.getType() != PageType.DATA_PAGE_V2 || h.getData_page_header_v2().isIs_compressed();
-                    if (compressed && h.getCompressed_page_size() > levels) {
+                    boolean decoded = h.getUncompressed_page_size() > levels;
+                    if (compressed && decoded && h.getCompressed_page_size() > levels) {
                         out.add(new Payload(chunk.getPath().toDotString(), h.getType(), at + levels, h.getCompressed_page_size() - levels));
                     }
                     in.skipNBytes(h.getCompressed_page_size());

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Literal
 
 from tparquet import _lib
+from tparquet._core import _int
 
 #: `CompressionCodec.PCODEC` in the Parquet footer.
 CODEC_ID: int = _lib.CODEC_ID
@@ -30,13 +31,13 @@ def compress(data: bytes, hint: Hint | None = None, level: int = 8) -> bytes:
     decimal-valued floats as exact integers); without it the payload is ZSTD or RAW.
     `level` is pcodec's compression level, 0 to 12.
     """
-    return _lib.compress(data, hint, level)
+    return _lib.compress(data, hint, _int("level", level))
 
 
 def decompress(payload: bytes, expected_len: int) -> bytes:
     """Decodes a payload, which must produce exactly `expected_len` bytes; raises
     `PcodecError` on any malformed payload."""
-    return _lib.decompress(payload, expected_len)
+    return _lib.decompress(payload, _int("expected_len", expected_len))
 
 
 def mode(payload: bytes) -> Mode:

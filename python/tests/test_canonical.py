@@ -149,9 +149,38 @@ def test_c_array_objects() -> None:
     assert list(canonical.lines(OnlyArray())) == ['{"a":1}', '{"a":2}']
 
 
+@pytest.mark.parametrize("t", [pa.list_view(pa.int32()), pa.large_list_view(pa.int32())], ids=str)
+def test_list_views_are_lists(t: pa.DataType) -> None:
+    # testdata/README.md: lists of any kind are JSON arrays
+    arr = pa.array([[1, None, 3], None, [], [4]], t)
+    assert line(arr) == ['{"x":[1,null,3]}', '{"x":null}', '{"x":[]}', '{"x":[4]}']
+    assert line(arr.slice(2)) == ['{"x":[]}', '{"x":[4]}']
+    # views may overlap and go in any order
+    shared = pa.ListViewArray.from_arrays(  # type: ignore[call-overload]
+        pa.array([2, 0, 1], pa.int32()), pa.array([1, 3, 2], pa.int32()), pa.array([7, 8, 9])
+    )
+    assert line(shared) == ['{"x":[9]}', '{"x":[7,8,9]}', '{"x":[8,9]}']
+
+
+def test_run_end_encoded_values_are_decoded() -> None:
+    arr = pa.RunEndEncodedArray.from_arrays([2, 3, 5], pa.array([1, None, 2], pa.int64()))  # type: ignore[call-overload]
+    assert line(arr) == ['{"x":1}', '{"x":1}', '{"x":null}', '{"x":2}', '{"x":2}']
+    assert line(arr.slice(1, 3)) == ['{"x":1}', '{"x":null}', '{"x":2}']
+
+
 def test_unsupported_types() -> None:
-    lv = pa.array([[1]], pa.list_view(pa.int32()))
-    with pytest.raises(TypeError, match="list_view"):
-        line(lv)
+    union = pa.UnionArray.from_sparse(pa.array([0], pa.int8()), [pa.array([1])])
+    with pytest.raises(TypeError, match=r"^canonical JSON does not cover sparse_union"):
+        line(union)
     with pytest.raises(TypeError, match=r"^expected Arrow data \(a table, a record batch or a stream\), got int$"):
         list(canonical.lines(42))
+
+
+def test_intervals_are_months_days_and_nanoseconds() -> None:
+    mdn = pa.array([(1, -2, 3), None, (2**31 - 1, -(2**31), -(2**63))], pa.month_day_nano_interval())
+    assert line(mdn) == [
+        '{"x":{"months":1,"days":-2,"nanoseconds":3}}',
+        '{"x":null}',
+        '{"x":{"months":2147483647,"days":-2147483648,"nanoseconds":-9223372036854775808}}',
+    ]
+    assert line(mdn.slice(1)) == line(mdn)[1:]

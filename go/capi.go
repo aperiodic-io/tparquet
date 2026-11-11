@@ -70,3 +70,6 @@ func linkedCodecID() int32 { return int32(C.pcp_codec_id()) }
 func linkedCompressBound(n int64) int64 { return int64(C.pcp_compress_bound(C.size_t(n))) }
 
 func linkedABIVersion() uint32 { return uint32(C.pcp_abi_version()) }
+
+// abiVersion is PCP_ABI_VERSION of the header this package is compiled with.
+const abiVersion uint32 = C.PCP_ABI_VERSION

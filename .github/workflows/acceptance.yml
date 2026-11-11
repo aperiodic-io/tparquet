@@ -5,7 +5,19 @@ name: acceptance
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "bench/**"
+      - "polars-tparquet/**"
+      - "trino/**"
+      - "brand/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "bench/**"
+      - "polars-tparquet/**"
+      - "trino/**"
+      - "brand/**"
+      - "**/*.md"
   workflow_dispatch:
 
 permissions:
@@ -47,8 +59,20 @@ jobs:
         run: |
           uv sync --locked --python 3.14
           uv run --no-sync maturin develop --uv
+      # the DuckDB fork's build of the DuckDB that python/.venv has (acceptance/cross/run.sh), with
+      # duckdb.yml's cache
+      - name: the DuckDB version of python/.venv
+        id: duckdb
+        run: echo "version=$(python/.venv/bin/python -c 'import duckdb; print(duckdb.__version__)')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            target/duckdb/dl
+            target/ccache
+          key: duckdb-${{ steps.duckdb.outputs.version }}-${{ hashFiles(format('duckdb/{0}.patch', steps.duckdb.outputs.version), 'duckdb/build.sh') }}
+          restore-keys: duckdb-${{ steps.duckdb.outputs.version }}-
       - name: the DuckDB extension
-        run: make -C duckdb build JOBS=4
+        run: make -C duckdb build VERSIONS=${{ steps.duckdb.outputs.version }} JOBS=4
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin

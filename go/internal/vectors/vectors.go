@@ -87,6 +87,8 @@ type vector struct {
 	recs  func() []arrow.RecordBatch
 	props []parquet.WriterProperty
 	auto  bool // write with tparquet.FileWriter (Auto) instead of props
+	// opts: write with tparquet.FileWriter and these options (props are its writer properties)
+	opts []tparquet.Option
 }
 
 // Generate writes every Go-produced vector into dir/files and dir/expected and returns
@@ -134,8 +136,8 @@ func (v vector) write(dir string) error {
 		Close() error
 	}
 	var w writer
-	if v.auto {
-		w, err = tparquet.NewFileWriter(sc, f, tparquet.WithWriterProperties(v.props...))
+	if v.auto || v.opts != nil {
+		w, err = tparquet.NewFileWriter(sc, f, append(v.opts, tparquet.WithWriterProperties(v.props...))...)
 	} else {
 		var fw *pqarrow.FileWriter
 		fw, err = pqarrow.NewFileWriter(sc, f, parquet.NewWriterProperties(v.props...), pqarrow.DefaultWriterProps())

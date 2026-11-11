@@ -22,7 +22,7 @@ use std::sync::Arc;
 fn canonical_port_reads_every_vector() {
     // the arrow 59 port of rust/tparquet/src/canonical.rs, over the fork's own reader
     let names = vector_names();
-    assert_eq!(names.len(), 13);
+    assert_eq!(names.len(), 24);
     for name in &names {
         let file = std::fs::File::open(vector_file(name)).unwrap();
         let reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap().build().unwrap();
@@ -268,6 +268,7 @@ async fn payload_vectors_decode_or_fail_through_datafusion() {
             Err(e) => assert_eq!(e.to_string(), v["error"].as_str().unwrap(), "{name}"),
         }
     }
-    // raw_empty, empty_payload and truncated_header have an expected size of 0
-    assert_eq!((valid, invalid, empty), (13, 19, 3));
+    // raw_empty, empty_payload, truncated_header, pco_no_values, decimal_no_values,
+    // zstd_empty_frame and zstd_empty_body have an expected size of 0
+    assert_eq!((valid, invalid, empty), (14, 23, 7));
 }

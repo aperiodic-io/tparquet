@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import decimal
 import io
 import pathlib
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import duckdb
 import pyarrow as pa
@@ -153,3 +154,83 @@ def test_works_without_pyarrow(trades: pathlib.Path) -> None:
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "(1000, 100)"
+
+
+def test_types_as_duckdb_reads_them(con: duckdb.DuckDBPyConnection, tmp_path: pathlib.Path) -> None:
+    # nested data, zones, decimals, nulls at every level: as DuckDB reads the standard copy
+    t = pa.table(
+        {
+            "i8": pa.array([1, None, -3], pa.int8()),
+            "u64": pa.array([2**64 - 1, 0, None], pa.uint64()),
+            "f": pa.array([float("nan"), -0.0, None]),
+            "d": pa.array([0, None, 20_000], pa.date32()),
+            "t": pa.array([0, None, 2**60], pa.timestamp("ns", "Asia/Tokyo")),
+            "dec": pa.array([None, decimal.Decimal("1.5"), decimal.Decimal("-2.125")], pa.decimal128(18, 3)),
+            "l": pa.array([[1, None], None, []], pa.list_(pa.int64())),
+            "s": pa.array([{"a": 1, "b": "x"}, None, {"a": None, "b": None}]),
+            "m": pa.array([[("k", 1.5)], [], None], pa.map_(pa.string(), pa.float64())),
+            "str": pa.array(["é", None, ""]),
+            "bin": pa.array([b"\x00", None, b""]),
+        }
+    )
+    ours, std = tmp_path / "ours.parquet", tmp_path / "std.parquet"
+    ppc.write_table(t, ours, policy="pcodec")
+    ppc.transcode(ours, std, target="standard")
+    pdd.register(con, "ours", ours)
+    assert repr(con.sql("select * from ours").fetchall()) == repr(
+        con.sql(f"select * from read_parquet('{std}')").fetchall()
+    )
+    assert con.sql("select count(*) from ours where l is not null and len(l) = 2").fetchall() == [(1,)]
+
+
+def test_queries_push_nothing_down_but_are_right(con: duckdb.DuckDBPyConnection, trades: pathlib.Path) -> None:
+    pdd.register(con, "t", trades)
+    assert con.sql("select sym, count(*), round(sum(price), 2) from t group by sym order by sym").fetchall() == [
+        ("S0", 334, round(sum(round(100 + (i % 41) * 0.01, 2) for i in range(0, 1000, 3)), 2)),
+        ("S1", 333, round(sum(round(100 + (i % 41) * 0.01, 2) for i in range(1, 1000, 3)), 2)),
+        ("S2", 333, round(sum(round(100 + (i % 41) * 0.01, 2) for i in range(2, 1000, 3)), 2)),
+    ]
+    assert con.sql("select size from t limit 3").fetchall() == [(100,), (200,), (300,)]
+    assert con.sql("select count(*) from t where ts > (select min(ts) from t)").fetchall() == [(999,)]
+
+
+def test_many_connections_and_threads(trades: pathlib.Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    source = pdd.ArrowSource(trades)
+
+    def query(i: int) -> int:
+        con = duckdb.connect()
+        try:
+            con.register("t", source)
+            ((count,),) = con.sql(f"select count(*) from t where size > {i * 100}").fetchall()
+            return int(count)
+        finally:
+            con.close()
+
+    with ThreadPoolExecutor(8) as pool:
+        counts = list(pool.map(query, range(14)))
+    assert counts == [sum(1 for j in range(1000) if (j % 13 + 1) * 100 > i * 100) for i in range(14)]
+
+
+def test_errors_reach_duckdb(con: duckdb.DuckDBPyConnection, tmp_path: pathlib.Path, trades: pathlib.Path) -> None:
+    data = bytearray(trades.read_bytes())
+    for i in range(100, 300):
+        data[i] ^= 0x5A
+    bad = tmp_path / "bad.parquet"
+    bad.write_bytes(bytes(data))
+    pdd.register(con, "bad", bad)
+    with pytest.raises(duckdb.Error):
+        con.sql("select * from bad").fetchall()
+    with pytest.raises(FileNotFoundError):
+        pdd.register(con, "missing", tmp_path / "missing.parquet")
+    # columns are checked when the source is made, not when DuckDB first reads it
+    makers: list[Callable[[], object]] = [
+        lambda: pdd.register(con, "x", trades, columns=["nope"]),
+        lambda: pdd.sql_view(con, "x", trades, columns=["nope"]),
+        lambda: pdd.read_parquet(trades, connection=con, columns=["nope"]),
+        lambda: pdd.ArrowSource(trades, columns=["nope"]),
+    ]
+    for make in makers:
+        with pytest.raises(ppc.PcodecError, match=r"^no column named 'nope'$"):
+            make()

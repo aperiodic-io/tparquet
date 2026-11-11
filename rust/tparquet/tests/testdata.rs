@@ -109,12 +109,20 @@ fn files_read_as_expected() {
     let _lock = TESTDATA.lock().unwrap_or_else(|e| e.into_inner());
     let m = manifest(&testdata().join("files/manifest.json"));
     let files = m["files"].as_array().unwrap();
-    assert_eq!(files.len(), 13);
+    assert_eq!(files.len(), 24);
     let mut modes = BTreeSet::new();
     let mut pcodec = 0;
     for f in files {
         let path = testdata().join(f["file"].as_str().unwrap());
-        let reader = tparquet::read::open(&path).unwrap().build().unwrap();
+        let builder = tparquet::read::open(&path).unwrap();
+        let mut footer = serde_json::Map::new();
+        for kv in builder.metadata().file_metadata().key_value_metadata().into_iter().flatten() {
+            if kv.key != "ARROW:schema" {
+                footer.insert(kv.key.clone(), kv.value.clone().into());
+            }
+        }
+        assert_eq!(Value::Object(footer), f["key_value_metadata"], "{}", f["name"]);
+        let reader = builder.build().unwrap();
         let mut actual = String::new();
         for b in reader {
             canonical::write_batch(&b.unwrap(), &mut actual).unwrap();
@@ -127,10 +135,32 @@ fn files_read_as_expected() {
         }
         pcodec += usize::from(f["pcodec_version"] == "1");
     }
-    for m in ["RAW", "PCO", "DECIMAL", "ZSTD"] {
+    // the four payload modes, and the two labels of pages without a payload to decode
+    for m in ["RAW", "PCO", "DECIMAL", "ZSTD", "EMPTY", "UNCOMPRESSED"] {
         assert!(modes.contains(m), "{m}");
     }
-    assert_eq!(pcodec, 12);
+    assert_eq!(pcodec, 23);
+}
+
+#[test]
+fn the_large_page_holds_two_pcodec_chunks() {
+    // pcodec's chunks hold at most 2^18 numbers: the one payload of large_page has two
+    let file = std::fs::read(testdata().join("files/large_page.parquet")).unwrap();
+    let report = tparquet::inspect::inspect(&bytes::Bytes::from(file.clone())).unwrap();
+    assert_eq!(report.columns[0].pages, [("DATA_PAGE_V2".to_string(), 1)].into());
+    let magic = file.windows(4).position(|w| w == b"pco!").unwrap();
+    assert_eq!(file[magic - 3..magic], [1, 1, 1], "version 1, PCO, INT32");
+    assert!(file[magic + 1..].windows(4).all(|w| w != b"pco!"), "one pcodec file");
+    let (fd, mut src) = pco::standalone::FileDecompressor::new(&file[magic..]).unwrap();
+    let mut sizes = vec![];
+    while let pco::standalone::DecompressorItem::Chunk(mut chunk) = fd.chunk_decompressor::<i32, _>(src).unwrap() {
+        sizes.push(chunk.n());
+        let mut out = vec![0; chunk.n()];
+        assert!(chunk.read(&mut out).unwrap().finished);
+        src = chunk.into_src();
+    }
+    assert_eq!(sizes, [135_000, 135_000]);
+    assert!(sizes.iter().sum::<usize>() > 1 << 18);
 }
 
 #[test]
@@ -160,7 +190,7 @@ fn payload_vectors_decode_or_fail() {
             invalid += 1;
         }
     }
-    assert_eq!((valid, invalid), (14, 21));
+    assert_eq!((valid, invalid), (18, 26));
 }
 
 /// Copies `files/` and `expected/` of `from` into `to`.
@@ -181,13 +211,13 @@ fn check(dir: &Path) -> assert_cmd::assert::Assert {
 #[test]
 fn check_reads_every_vector_of_a_directory() {
     let _lock = TESTDATA.lock().unwrap_or_else(|e| e.into_inner());
-    check(&testdata()).success().stdout("13 vectors match\n").stderr("");
+    check(&testdata()).success().stdout("24 vectors match\n").stderr("");
 
     // the vectors of another writer: files/ and expected/ only (no manifests needed)
     let dir = tempfile::tempdir().unwrap();
     copy_vectors(&testdata(), dir.path());
     std::fs::remove_file(dir.path().join("files/manifest.json")).unwrap();
-    check(dir.path()).success().stdout("13 vectors match\n");
+    check(dir.path()).success().stdout("24 vectors match\n");
 
     // a changed row is reported by vector and line
     let path = dir.path().join("expected/temporal.jsonl");
@@ -225,4 +255,36 @@ fn check_refuses_a_directory_without_vectors_or_with_a_corrupt_file() {
     std::fs::write(dir.path().join("files/bad.parquet"), b"PAR1 not parquet").unwrap();
     std::fs::write(dir.path().join("expected/bad.jsonl"), b"").unwrap();
     check(dir.path()).code(1).stderr(predicates::str::starts_with("gen-testdata: bad: "));
+}
+
+#[test]
+fn column_chunk_offsets_are_in_order() {
+    // every reader can find the pages: a dictionary page comes before the data pages, and a
+    // chunk without data pages has no dictionary page either (arrow-rs then writes
+    // data_page_offset 0, which arrow-go's GetDictionaryPage cannot take after a dictionary)
+    use tparquet::parquet::file::metadata::ParquetMetaDataReader;
+    let _lock = TESTDATA.lock().unwrap_or_else(|e| e.into_inner());
+    for e in std::fs::read_dir(testdata().join("files")).unwrap() {
+        let path = e.unwrap().path();
+        if path.extension().is_none_or(|x| x != "parquet") {
+            continue;
+        }
+        let file = bytes::Bytes::from(std::fs::read(&path).unwrap());
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(&file).unwrap();
+        for rg in metadata.row_groups() {
+            for c in rg.columns() {
+                let name = format!("{} {}", path.display(), c.column_path());
+                if let Some(dictionary) = c.dictionary_page_offset() {
+                    assert!(dictionary < c.data_page_offset(), "{name}");
+                }
+                if rg.num_rows() == 0 {
+                    assert_eq!((c.dictionary_page_offset(), c.compressed_size()), (None, 0), "{name}");
+                }
+            }
+        }
+    }
+    // the file with a row group without rows has no pages at all
+    let report =
+        tparquet::inspect::inspect(&std::fs::File::open(testdata().join("files/empty.parquet")).unwrap()).unwrap();
+    assert!(report.columns.iter().all(|c| c.pages.is_empty() && c.modes.is_empty()), "{report:?}");
 }

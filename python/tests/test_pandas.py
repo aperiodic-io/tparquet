@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import io
 import pathlib
 
@@ -216,3 +217,131 @@ def test_to_parquet_passes_every_option() -> None:
 def test_rejects_non_frames(tmp_path: pathlib.Path) -> None:
     with pytest.raises(TypeError, match="expected a pandas DataFrame, got dict"):
         ppd.to_parquet({"a": [1]}, tmp_path / "x.parquet")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------- every kind of index and dtype
+
+
+N = 12
+
+
+def indexes() -> dict[str, pd.Index]:
+    return {
+        "range": pd.RangeIndex(N),
+        "range_step": pd.RangeIndex(5, 5 + 3 * N, 3),
+        "range_named": pd.RangeIndex(N, name="r"),
+        "int": pd.Index(np.arange(N) * 7, name="k"),
+        "unnamed_int": pd.Index(np.arange(N)[::-1]),
+        "string": pd.Index([f"i{i}" for i in range(N)], name="s"),
+        "datetime_tz": pd.date_range("2025-03-30", periods=N, freq="h", tz="Europe/Berlin", name="t"),
+        "datetime": pd.date_range("2025-01-01", periods=N, freq="D"),
+        "categorical": pd.CategoricalIndex(list("abc") * (N // 3), categories=list("cba"), name="c"),
+        "multi": pd.MultiIndex.from_arrays([list("ab") * (N // 2), np.arange(N)], names=["l", "n"]),
+        "multi_unnamed": pd.MultiIndex.from_arrays([np.arange(N) % 3, np.arange(N)]),
+        "float": pd.Index(np.arange(N) / 2, name="f"),
+        "duplicate_names": pd.MultiIndex.from_arrays([np.arange(N), np.arange(N)], names=["x", "x"]),
+    }
+
+
+@pytest.mark.parametrize("index", [None, True, False])
+@pytest.mark.parametrize("kind", list(indexes()))
+def test_every_index(tmp_path: pathlib.Path, kind: str, index: bool | None) -> None:
+    df = pd.DataFrame({"v": np.arange(N, dtype=np.int64), "w": np.arange(N) / 3}, index=indexes()[kind])
+    assert_same_as_pyarrow(df, tmp_path, index=index)
+
+
+DTYPES: dict[str, object] = {
+    "int8": np.arange(N, dtype=np.int8),
+    "uint32": np.arange(N, dtype=np.uint32) * 1_000_000,
+    "float16": np.arange(N, dtype=np.float16),
+    "Int8": pd.array([None, *range(N - 1)], dtype="Int8"),
+    "UInt64": pd.array([None, *range(N - 1)], dtype="UInt64"),
+    "Float64": pd.array([None, *np.arange(N - 1) / 2], dtype="Float64"),
+    "boolean": pd.array([None, True, False] * (N // 3), dtype="boolean"),
+    "string": pd.array([None, *map(str, range(N - 1))], dtype="string"),
+    "string_pyarrow": pd.array([None, *map(str, range(N - 1))], dtype="string[pyarrow]"),
+    "int64_pyarrow": pd.array([None, *range(N - 1)], dtype="int64[pyarrow]"),
+    "decimal_pyarrow": pd.arrays.ArrowExtensionArray(
+        pa.array([None, *(decimal.Decimal(i).scaleb(-2) for i in range(N - 1))], pa.decimal128(10, 2))
+    ),
+    "list_pyarrow": pd.arrays.ArrowExtensionArray(pa.array([None, *([i] for i in range(N - 1))], pa.list_(pa.int64()))),
+    "timestamp_pyarrow": pd.arrays.ArrowExtensionArray(
+        pa.array([None, *range(N - 1)], pa.timestamp("ns", "Asia/Tokyo"))
+    ),
+    "datetime_tz": pd.date_range("2025-11-02", periods=N, freq="30min", tz="America/Chicago"),
+    "datetime_ns": pd.date_range("1677-09-22", periods=N, freq="D"),
+    "datetime_s": pd.Series(pd.date_range("2025", periods=N, freq="s")).astype("datetime64[s]").array,
+    "timedelta": pd.to_timedelta(np.arange(N) - 5, unit="h"),
+    "period": pd.period_range("2025-01", periods=N, freq="M"),
+    "interval": pd.interval_range(0, N),
+    "category_str": pd.Categorical(list("xyz") * (N // 3), categories=list("zyxw")),
+    "category_int": pd.Categorical(np.arange(N) % 3, categories=[2, 1, 0, 9], ordered=True),
+    "category_with_nan": pd.Categorical([None, "a", "b"] * (N // 3)),
+    "object_str": np.array([f"o{i}" for i in range(N)], dtype=object),
+    "object_bytes": np.array([bytes([i]) for i in range(N)], dtype=object),
+    "date_object": np.array([pd.Timestamp("2025-01-01").date()] * N, dtype=object),
+    "sparse": pd.arrays.SparseArray([0, 0, 1] * (N // 3)),
+}
+
+
+@pytest.mark.parametrize("name", list(DTYPES))
+def test_every_dtype(tmp_path: pathlib.Path, name: str) -> None:
+    df = pd.DataFrame({name: DTYPES[name], "other": np.arange(N)})
+    if name == "sparse":
+        # pyarrow refuses sparse columns; so does this package, the same way
+        with pytest.raises((TypeError, pa.ArrowException)):
+            ppd.to_parquet(df, tmp_path / "x.parquet")
+        return
+    if name == "list_pyarrow":
+        # pandas cannot read its own metadata of a pyarrow list dtype back; neither can this
+        df.to_parquet(tmp_path / "theirs.parquet", engine="pyarrow")
+        with pytest.raises(TypeError, match="not understood"):
+            pd.read_parquet(tmp_path / "theirs.parquet", engine="pyarrow")
+        ppd.to_parquet(df, tmp_path / "ours.parquet")
+        with pytest.raises(TypeError, match="not understood"):
+            ppd.read_parquet(tmp_path / "ours.parquet")
+        assert ppd.read_parquet(tmp_path / "ours.parquet", ignore_metadata=True)[name].tolist()[1:] == [
+            [i] for i in range(N - 1)
+        ]
+        return
+    if name in KEPT_BETTER:
+        # pyarrow reads these back as something else; this package keeps them
+        path = tmp_path / "ours.parquet"
+        ppd.to_parquet(df, path)
+        pd.testing.assert_frame_equal(ppd.read_parquet(path), df)
+        theirs = tmp_path / "theirs.parquet"
+        df.to_parquet(theirs, engine="pyarrow")
+        assert pd.read_parquet(theirs)[name].dtype != df[name].dtype
+        return
+    back = assert_same_as_pyarrow(df, tmp_path)
+    if name.startswith("category"):
+        assert back[name].dtype == df[name].dtype
+
+
+#: pyarrow stores seconds as milliseconds and reads integer categories as plain integers
+KEPT_BETTER = {"datetime_s", "category_int"}
+
+
+def test_a_frame_without_rows_or_columns(tmp_path: pathlib.Path) -> None:
+    for df in [pd.DataFrame(), pd.DataFrame({"a": []}, dtype="int64"), pd.DataFrame(index=pd.RangeIndex(5))]:
+        assert_same_as_pyarrow(df, tmp_path)
+
+
+def test_attrs_and_column_names(tmp_path: pathlib.Path) -> None:
+    df = pd.DataFrame({"a b": [1], "é": [2.0], "1": [3]})
+    df.attrs = {"source": "test"}
+    back = assert_same_as_pyarrow(df, tmp_path)
+    assert back.attrs == {"source": "test"}
+    # column names that are not strings are stored as strings, as pyarrow does
+    assert_same_as_pyarrow(pd.DataFrame({0: [1], 1: [2]}), tmp_path)
+
+
+def test_read_parquet_keyword_arguments(tmp_path: pathlib.Path) -> None:
+    df = pd.DataFrame({"a": pd.array([1, None], dtype="Int64"), "s": ["x", None]})
+    path = tmp_path / "k.parquet"
+    ppd.to_parquet(df, path)
+    arrow = ppd.read_parquet(path, types_mapper=pd.ArrowDtype)
+    assert isinstance(arrow["a"].dtype, pd.ArrowDtype)
+    assert ppd.read_parquet(path, columns=["s"]).columns.tolist() == ["s"]
+    with pytest.raises(TypeError):
+        ppd.read_parquet(path, not_an_argument=True)

@@ -39,8 +39,11 @@ PIT_MODULES := tparquet-jni parquet-java/parquet-format-structures parquet-java/
 mutants: install
 	for m in $(PIT_MODULES); do $(MVN) -pl $$m test-compile org.pitest:pitest-maven:mutationCoverage || exit 1; done
 
-# cargo mutants on rust/jni, judged by the Java suite (rust/jni/tests/java_suite.rs)
+# cargo mutants on rust/jni, judged by the Java suite (rust/jni/tests/java_suite.rs). That suite
+# runs Maven offline, so it is run online once first: `install` skips the tests and so never
+# fetches surefire's JUnit provider, which a fresh Maven repository does not hold
 jni-mutants: install
+	$(MVN) -q -pl tparquet-jni test
 	cd $(ROOT) && TPARQUET_MAVEN=$$(command -v mvn) cargo mutants -p tparquet-jni -j 2 $(MUTANTS_OK)
 
 # the jars that make a Spark 4.3 distribution read and write tparquet (java/README.md, Spark):

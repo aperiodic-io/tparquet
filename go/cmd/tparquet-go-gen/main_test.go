@@ -21,6 +21,31 @@ func TestRun(t *testing.T) {
 	if code := run([]string{"-check", dir}, &out, &errOut); code != 0 || !strings.HasSuffix(out.String(), " vectors match\n") {
 		t.Fatalf("check: exit %d, %q %q", code, out.String(), errOut.String())
 	}
+	if strings.Contains(out.String(), "payloads") {
+		t.Fatalf("no payloads to check: %q", out.String())
+	}
+	// With payload vectors, -check decodes them too.
+	pd := filepath.Join(dir, "payloads")
+	if err := os.MkdirAll(pd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"format_version":1,"vectors":[{"name":"raw","payload":"raw.bin","expected_len":1,"valid":true,"decoded":"raw.out","mode":"RAW","hint":null,"level":8}]}`
+	for name, b := range map[string][]byte{"manifest.json": []byte(manifest), "raw.bin": {1, 0, 7}, "raw.out": {7}} {
+		if err := os.WriteFile(filepath.Join(pd, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out.Reset()
+	if code := run([]string{"-check", dir}, &out, &errOut); code != 0 || !strings.HasSuffix(out.String(), " vectors match\n1 payloads match\n") {
+		t.Fatalf("check with payloads: exit %d, %q %q", code, out.String(), errOut.String())
+	}
+	if err := os.WriteFile(filepath.Join(pd, "raw.out"), []byte{8}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	errOut.Reset()
+	if code := run([]string{"-check", dir}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "raw: decodes to other bytes") {
+		t.Fatalf("a bad payload: exit %d, %q", code, errOut.String())
+	}
 	if err := os.WriteFile(filepath.Join(dir, "expected", "go_ints.jsonl"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

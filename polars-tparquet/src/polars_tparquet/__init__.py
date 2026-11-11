@@ -15,14 +15,17 @@ that are not PCODEC are read too.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import glob
 import os
-import pathlib
-from collections.abc import Mapping, Sequence
+import shutil
+import uuid
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Union
 
 import polars as pl
-from tparquet import Policy, Sink, Source, Writer
+from tparquet import PcodecError, Policy, Sink, Source, Writer
 from tparquet.polars import scan_parquet, write_parquet
 
 __all__ = ["DataFrameNamespace", "LazyFrameNamespace", "read_tparquet", "scan_tparquet"]
@@ -41,18 +44,35 @@ def _expand(source: Source) -> Sequence[Source]:
     """The files one source names: a glob's matches and a directory's .parquet files, sorted."""
     if not _is_path(source):
         return [source]
-    name = os.fsdecode(source)  # type: ignore[arg-type]
-    if isinstance(source, (str, bytes)) and _GLOB & set(name):
-        matches = sorted(glob.glob(name, recursive=True))
+    name = os.path.expanduser(os.fsdecode(source))  # type: ignore[arg-type]
+    # a path that exists names that file or directory, whatever characters it holds
+    if _GLOB & set(name) and not os.path.exists(name):
+        # the files it matches: a directory matched (by `**` or `*`) is not one
+        matches = sorted(m for m in glob.glob(name, recursive=True) if os.path.isfile(m))
         if not matches:
             raise FileNotFoundError(f"no file matches {name}")
         return matches
     if os.path.isdir(name):
-        below = sorted(str(p) for p in pathlib.Path(name).rglob("*.parquet") if p.is_file())
+        below = _parquet_files(name)
         if not below:
             raise FileNotFoundError(f"no .parquet file in {name}")
         return below
-    return [source]
+    return [name]
+
+
+def _parquet_files(folder: str) -> list[str]:
+    """The .parquet files (A.PARQUET too) below `folder`, sorted. Hidden files and directories
+    (whose names start with a dot: unfinished files of other writers, macOS `._` files) are
+    skipped, as a glob skips them, and symlinks to directories are not followed (symlinks to
+    files are)."""
+    found: list[str] = []
+    for top, folders, names in os.walk(folder):
+        folders[:] = [f for f in folders if not f.startswith(".")]
+        for n in names:
+            path = os.path.join(top, n)
+            if not n.startswith(".") and n.lower().endswith(".parquet") and os.path.isfile(path):
+                found.append(path)
+    return sorted(found)
 
 
 def _files(source: Sources) -> list[Source]:
@@ -67,14 +87,67 @@ def _name(source: Source) -> str:
     return os.fsdecode(source) if _is_path(source) else repr(source)  # type: ignore[arg-type]
 
 
+def _writable(schema: pl.Schema) -> pl.Schema:
+    """`schema`, if it can be written: Polars exports the values of an Object column (which
+    cannot be nested) as the addresses of its Python objects, so those are refused, as Polars'
+    own writer refuses them."""
+    for name, dtype in schema.items():
+        if dtype == pl.Object:
+            raise pl.exceptions.ComputeError(
+                f"cannot write column {name!r} of dtype Object: its values are Python objects"
+            )
+    return schema
+
+
+@contextlib.contextmanager
+def _replacing(target: Sink) -> Iterator[Sink]:
+    """Where to write `target`. A file object is written in place. A path is written as a hidden
+    temporary file beside it (beside the file it links to), which replaces it once complete and
+    is removed if writing fails: the target is never seen half written, a failure leaves it as it
+    was, and a query can write over a file it reads."""
+    if not _is_path(target):
+        yield target
+        return
+    path = os.path.realpath(os.path.expanduser(os.fsdecode(target)))  # type: ignore[arg-type]
+    folder, name = os.path.split(path)
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(errno.ENOENT, "no such directory", folder)
+    # replacing needs the right to write the directory only: a file that may not be written is
+    # refused, as writing it in place would be
+    if os.path.exists(path) and not os.access(path, os.W_OK):
+        raise PermissionError(errno.EACCES, "Permission denied", path)
+    temporary = os.path.join(folder, f".{name}.{uuid.uuid4().hex}.tmp")
+    try:
+        yield temporary
+        with contextlib.suppress(FileNotFoundError):  # a file replaced keeps its permissions
+            shutil.copymode(path, temporary)
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(temporary)
+        raise
+
+
+def _scan(f: Source, batch_size: int | None) -> pl.LazyFrame:
+    """One file as a LazyFrame; an error in its footer names the file."""
+    # tparquet opens the file here and keeps it open, so a relative path is the file it named
+    # now, whatever chdir follows before the query runs
+    try:
+        return scan_parquet(f, batch_size=batch_size)
+    except PcodecError as e:
+        raise PcodecError(f"{_name(f)}: {e}") from e
+
+
 def scan_tparquet(
     source: Sources, *, batch_size: int | None = None, include_file_paths: str | None = None
 ) -> pl.LazyFrame:
     """A LazyFrame over Parquet files (PCODEC or not), read in order.
 
-    `source` is a path, a binary file object, a glob (`*`, `?`, `[...]`; `**` matches
-    directories too), a directory (every `.parquet` file below it), or a list of these. Globs
-    and directories are read in sorted order. All files must have the same schema.
+    `source` is a path (a leading `~` is the home directory), a binary file object, a glob
+    (`*`, `?`, `[...]`; `**` matches directories too), a directory (every `.parquet` file below
+    it, hidden ones skipped), or a list of these. A path that exists is never a glob. Globs and
+    directories are read in sorted order, lists in the order given. A file object is read when
+    scanned, a relative path resolved. All files must have the same schema.
 
     Each file is a Polars IO source: the projection, row limit and predicate of the query reach
     the reader, and the predicate skips row groups whose statistics rule it out. Batches have
@@ -83,8 +156,15 @@ def scan_tparquet(
     """
     frames: list[pl.LazyFrame] = []
     first: tuple[str, pl.Schema] | None = None
+    # a file object is read (to its end) when scanned: one listed twice is scanned once
+    objects: dict[int, pl.LazyFrame] = {}
     for f in _files(source):
-        lf = scan_parquet(f, batch_size=batch_size)
+        if isinstance(f, str):
+            lf = _scan(f, batch_size)
+        else:
+            if id(f) not in objects:
+                objects[id(f)] = _scan(f, batch_size)
+            lf = objects[id(f)]
         schema = lf.collect_schema()
         if first is None:
             first = (_name(f), schema)
@@ -97,7 +177,10 @@ def scan_tparquet(
                 raise ValueError("include_file_paths needs file paths, not file objects")
             if include_file_paths in schema:
                 raise pl.exceptions.DuplicateError(f"{_name(f)} already has a column {include_file_paths!r}")
-            lf = lf.with_columns(pl.lit(_name(f)).alias(include_file_paths))
+            # a Polars string is UTF-8: a byte of the name that is not becomes one U+FFFD
+            # ("UTF-8", a mutant, names the same codec as "utf-8": no test can tell them apart)
+            shown = os.fsencode(_name(f)).decode("utf-8", "replace")  # pragma: no mutate
+            lf = lf.with_columns(pl.lit(shown).alias(include_file_paths))
         frames.append(lf)
     return pl.concat(frames)
 
@@ -105,18 +188,21 @@ def scan_tparquet(
 def read_tparquet(
     source: Sources,
     *,
-    columns: Sequence[str] | None = None,
+    columns: Sequence[str] | Sequence[int] | None = None,
     n_rows: int | None = None,
     batch_size: int | None = None,
     include_file_paths: str | None = None,
 ) -> pl.DataFrame:
-    """Parquet files (PCODEC or not) as one DataFrame: `scan_tparquet`, with `columns` in the
-    order given and at most `n_rows` rows, collected."""
+    """Parquet files (PCODEC or not) as one DataFrame: `scan_tparquet`, with `columns` (names, or
+    indices as Polars' `read_parquet` takes them) in the order given and at most `n_rows` rows,
+    collected."""
     if n_rows is not None and n_rows < 0:
         raise ValueError(f"n_rows must not be negative, got {n_rows}")
     lf = scan_tparquet(source, batch_size=batch_size, include_file_paths=include_file_paths)
     if columns is not None:
-        lf = lf.select(columns)
+        picked = [columns] if isinstance(columns, str) else columns
+        # an int given to select would be a literal, not the column at that index
+        lf = lf.select(pl.nth(c) if isinstance(c, int) else pl.col(c) for c in picked)
     if n_rows is not None:
         lf = lf.head(n_rows)
     return lf.collect()
@@ -148,10 +234,15 @@ class DataFrameNamespace:
         dotted leaf path to its own policy, `level` is the pcodec level (0 to 12), `base` the codec
         of the other columns (`"zstd(3)"`, `"snappy"`, ...) and `row_group_size` the most rows
         per row group.
+
+        A path is written as a hidden temporary file beside it, which replaces it once complete:
+        if writing fails, the target is left as it was.
         """
-        return write_parquet(
-            self._df, target, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size
-        )
+        _writable(self._df.schema)
+        with _replacing(target) as sink:
+            return write_parquet(
+                self._df, sink, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size
+            )
 
 
 @pl.api.register_lazyframe_namespace("tparquet")
@@ -177,24 +268,22 @@ class LazyFrameNamespace:
         else the engine's), never holding all of it; returns the codec of every leaf column.
 
         The options are those of `DataFrame.tparquet.write`; with `policy="auto"` the codecs are
-        chosen on the first batch with rows. If the query fails, a file the sink created is
-        removed.
+        chosen on the first batch with rows. A path is written as a hidden temporary file beside
+        it, which replaces it once complete: if the query fails, the target is left as it was,
+        and a query may write over a file it reads.
         """
         if chunk_size is not None and chunk_size <= 0:
             raise ValueError(f"chunk_size must be positive, got {chunk_size}")
-        writer = Writer(
-            target,
-            self._lf.collect_schema(),
-            policy=policy,
-            columns=columns,
-            level=level,
-            base=base,
-            row_group_size=row_group_size,
-        )
-        try:
+        schema = _writable(self._lf.collect_schema())
+        # the writer is closed on a normal exit and aborted on an exception
+        with (
+            _replacing(target) as sink,
+            Writer(
+                sink, schema, policy=policy, columns=columns, level=level, base=base, row_group_size=row_group_size
+            ) as writer,
+        ):
             for batch in self._lf.collect_batches(chunk_size=chunk_size):
                 writer.write(batch)
-        except BaseException:
-            writer.abort()
-            raise
-        return writer.close()
+        codecs = writer.codecs
+        assert codecs is not None  # closed: the codecs are chosen
+        return codecs

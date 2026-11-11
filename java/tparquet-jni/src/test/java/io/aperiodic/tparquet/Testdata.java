@@ -20,7 +20,13 @@ final class Testdata {
 
   /** One entry of {@code payloads/manifest.json}. */
   record Payload(String name, byte[] payload, int expectedLen, boolean valid, byte[] decoded, String mode,
-      PhysicalType hint, int level, String error) {}
+      PhysicalType hint, int level, boolean referenceEncoding, String error) {
+    /** The vector's name, for the parameterized tests' names. */
+    @Override
+    public String toString() {
+      return name;
+    }
+  }
 
   static List<Payload> payloads() {
     Path dir = dir().resolve("payloads");
@@ -38,6 +44,7 @@ final class Testdata {
             valid ? v.get("mode").asText() : null,
             valid && !v.get("hint").isNull() ? PhysicalType.valueOf(v.get("hint").asText()) : null,
             valid ? v.get("level").asInt() : -1,
+            valid && v.get("reference_encoding").asBoolean(),
             valid ? null : v.get("error").asText()));
       }
       return out;

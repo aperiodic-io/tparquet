@@ -3,9 +3,10 @@
 //
 // One JSON object per row, with the top-level fields as keys in schema order. Integers of
 // every width, timestamps, dates, times and the unscaled value of decimals are JSON numbers;
-// FLOAT and DOUBLE values are strings of their IEEE bits in lower-case hex ("0x3f800000",
-// "0x3ff0000000000000"); strings are JSON strings, binary values base64 strings, booleans
-// JSON booleans and nulls null; lists are arrays and structs objects in field order.
+// half float, FLOAT and DOUBLE values are strings of their IEEE bits in lower-case hex
+// ("0x3c00", "0x3f800000", "0x3ff0000000000000"); strings are JSON strings, binary values
+// base64 strings, booleans JSON booleans and nulls null; lists are arrays, structs objects in
+// field order, and maps arrays of {"key":...,"value":...} entries in stored order.
 package canonical
 
 import (
@@ -69,7 +70,7 @@ func writeString(buf *bytes.Buffer, s string) {
 }
 
 func value(buf *bytes.Buffer, arr arrow.Array, i int) error {
-	if arr.IsNull(i) {
+	if arr.IsNull(i) || arr.DataType().ID() == arrow.NULL { // a null array has no bitmap
 		buf.WriteString("null")
 		return nil
 	}
@@ -103,10 +104,20 @@ func value(buf *bytes.Buffer, arr arrow.Array, i int) error {
 		b = strconv.AppendInt(b, int64(a.Value(i)), 10)
 	case *array.Duration:
 		b = strconv.AppendInt(b, int64(a.Value(i)), 10)
+	case *array.MonthInterval:
+		b = interval(b, int64(a.Value(i)), 0, 0)
+	case *array.DayTimeInterval:
+		v := a.Value(i)
+		b = interval(b, 0, int64(v.Days), int64(v.Milliseconds)*1_000_000)
+	case *array.MonthDayNanoInterval:
+		v := a.Value(i)
+		b = interval(b, int64(v.Months), int64(v.Days), v.Nanoseconds)
 	case *array.Decimal128:
 		b = a.Value(i).BigInt().Append(b, 10)
 	case *array.Decimal256:
 		b = a.Value(i).BigInt().Append(b, 10)
+	case *array.Float16:
+		b = fmt.Appendf(b, `"0x%04x"`, a.Value(i).Uint16())
 	case *array.Float32:
 		b = fmt.Appendf(b, `"0x%08x"`, math.Float32bits(a.Value(i)))
 	case *array.Float64:
@@ -125,6 +136,9 @@ func value(buf *bytes.Buffer, arr arrow.Array, i int) error {
 		return writeBase64(buf, a.Value(i))
 	case *array.FixedSizeBinary:
 		return writeBase64(buf, a.Value(i))
+	case *array.Map: // entries are structs: {"key":...,"value":...}
+		start, end := a.ValueOffsets(i)
+		return list(buf, a.ListValues(), int(start), int(end))
 	case *array.List:
 		start, end := a.ValueOffsets(i)
 		return list(buf, a.ListValues(), int(start), int(end))
@@ -156,6 +170,14 @@ func value(buf *bytes.Buffer, arr arrow.Array, i int) error {
 	}
 	buf.Write(b)
 	return nil
+}
+
+// interval appends the canonical form of every interval type: months, days and nanoseconds.
+func interval(b []byte, months, days, nanoseconds int64) []byte {
+	b = strconv.AppendInt(append(b, `{"months":`...), months, 10)
+	b = strconv.AppendInt(append(b, `,"days":`...), days, 10)
+	b = strconv.AppendInt(append(b, `,"nanoseconds":`...), nanoseconds, 10)
+	return append(b, '}')
 }
 
 func writeBase64(buf *bytes.Buffer, v []byte) error {

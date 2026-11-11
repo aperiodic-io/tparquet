@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import pathlib
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Union
 
 import polars as pl
 import pytest
 import tparquet
 from hypothesis import HealthCheck, settings
+from polars.datatypes import DataTypeClass
 from tparquet.polars import write_parquet
 
 _slow_ok = [HealthCheck.too_slow, HealthCheck.function_scoped_fixture]
@@ -79,3 +82,84 @@ def reads(monkeypatch: pytest.MonkeyPatch) -> Reads:
 
     monkeypatch.setattr(tparquet.ParquetFile, "stream", recording)
     return spy
+
+
+#: A dtype as Polars gives it: an instance, or a class such as pl.Int64.
+DType = Union[pl.DataType, DataTypeClass]
+
+#: Each float dtype: the unsigned integer of its bits, and the hex digits canonical JSON gives them.
+_BITS: dict[Any, tuple[pl.DataType, int]] = {
+    pl.Float16: (pl.UInt16(), 4),
+    pl.Float32: (pl.UInt32(), 8),
+    pl.Float64: (pl.UInt64(), 16),
+}
+
+
+def float_bits(s: pl.Series) -> list[int | None]:
+    """The IEEE 754 bits of each value of a float Series (None for a null)."""
+    bits: list[int | None] = s.reinterpret(dtype=_BITS[s.dtype.base_type()][0]).to_list()
+    return bits
+
+
+def _entries(dtype: pl.Map) -> pl.List:
+    """A map as canonical JSON writes it: a list of its entries, `{"key":...,"value":...}`, in
+    stored order (a Map value in Python is a dict, which would lose duplicates and the order)."""
+    return pl.List(pl.Struct({"key": dtype.key, "value": dtype.value}))
+
+
+def _stored(e: pl.Expr, dtype: DType) -> pl.Expr:
+    """`e` with every value as canonical JSON stores it: floats as their bits, temporal values
+    and decimals as their stored integer, dictionaries decoded; nesting kept."""
+    if dtype.base_type() in _BITS:
+        return e.reinterpret(dtype=_BITS[dtype.base_type()][0])
+    if dtype == pl.Time:
+        return e.to_physical() // 1000  # Polars holds nanoseconds; the vectors store time64(us)
+    if dtype.is_temporal() or dtype.is_decimal():
+        return e.to_physical()
+    if isinstance(dtype, (pl.Categorical, pl.Enum)):
+        return e.cast(pl.String)
+    if isinstance(dtype, pl.Map):
+        return _stored(e.cast(_entries(dtype)), _entries(dtype))
+    if isinstance(dtype, (pl.List, pl.Array)):
+        inner = dtype.inner
+        assert inner is not None
+        # arr.to_list: a cast to List panics in list.eval on values masked out by nulls (Polars 2.1)
+        listed = e.arr.to_list() if isinstance(dtype, pl.Array) else e
+        return listed.list.eval(_stored(pl.element(), inner))
+    if isinstance(dtype, pl.Struct):
+        fields = [_stored(e.struct.field(f.name), f.dtype).alias(f.name) for f in dtype.fields]
+        return pl.when(e.is_null()).then(None).otherwise(pl.struct(fields))
+    return e
+
+
+def _json(value: Any, dtype: DType) -> str:
+    if value is None:
+        return "null"
+    base = dtype.base_type()
+    if base in _BITS:
+        return f'"0x{value:0{_BITS[base][1]}x}"'
+    if dtype == pl.Boolean:
+        return "true" if value else "false"
+    if dtype.is_numeric() or dtype.is_temporal():
+        return str(int(value))
+    if dtype == pl.Binary:
+        return json.dumps(base64.b64encode(value).decode())
+    if isinstance(dtype, pl.Map):
+        return _json(value, _entries(dtype))
+    if isinstance(dtype, (pl.List, pl.Array)):
+        inner = dtype.inner
+        assert inner is not None
+        return "[" + ",".join(_json(v, inner) for v in value) + "]"
+    if isinstance(dtype, pl.Struct):
+        return "{" + ",".join(f"{json.dumps(f.name)}:{_json(value[f.name], f.dtype)}" for f in dtype.fields) + "}"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def canonical(df: pl.DataFrame) -> str:
+    """`df` as the canonical JSON of testdata/README.md: one line per row, `\\n`-terminated."""
+    stored = df.select(_stored(pl.col(name), dtype).alias(name) for name, dtype in df.schema.items())
+    schema = list(df.schema.items())
+    return "".join(
+        "{" + ",".join(f"{json.dumps(n)}:{_json(v, t)}" for (n, t), v in zip(schema, row)) + "}\n"
+        for row in stored.iter_rows()
+    )

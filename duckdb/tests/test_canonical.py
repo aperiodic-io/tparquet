@@ -2,7 +2,6 @@
 
 import pyarrow as pa
 import pytest
-
 from canonical import lines, values
 
 
@@ -46,3 +45,13 @@ def test_strings_decimals_binary_and_nesting():
     assert values(d, d.type) == ['"u"', "null", '"u"']
     t = pa.table({"a": [1, 2], "b": ["x", None]})
     assert lines(t, t.schema) == '{"a":1,"b":"x"}\n{"a":2,"b":null}\n'
+
+
+def test_intervals_are_months_days_and_nanoseconds():
+    # DuckDB hands its INTERVAL (months, days, microseconds) to Arrow as month-day-nano
+    mdn = pa.array([(1, -2, 3_000), None, (2**31 - 1, -(2**31), -(2**63))], pa.month_day_nano_interval())
+    assert values(mdn, pa.month_day_nano_interval()) == [
+        '{"months":1,"days":-2,"nanoseconds":3000}',
+        "null",
+        '{"months":2147483647,"days":-2147483648,"nanoseconds":-9223372036854775808}',
+    ]

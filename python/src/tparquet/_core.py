@@ -4,6 +4,8 @@ where a function returns pyarrow objects."""
 from __future__ import annotations
 
 import dataclasses
+import errno
+import io
 import json
 import os
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Union
@@ -70,10 +72,22 @@ def _path(source: object) -> str | None:
     return None
 
 
+def _binary(obj: object, mode: str) -> None:
+    """Refuses a text-mode file object, which cannot hold Parquet bytes."""
+    if isinstance(obj, io.TextIOBase):
+        raise TypeError(
+            f"expected a binary file object, got a text file ({type(obj).__name__}), which holds str, not bytes: "
+            f"open it in binary mode ('{mode}')"
+        )
+
+
 def _open(source: Source) -> _lib.File:
     path = _path(source)
     if path is not None:
+        if os.path.isdir(path):
+            raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), path)
         return _lib.open_path(path)
+    _binary(source, "rb")
     read = getattr(source, "read", None)
     if read is None:
         raise TypeError(f"expected a path or a binary file object, got {type(source).__name__}")
@@ -88,20 +102,52 @@ def _sink(target: Sink) -> object:
     path = _path(target)
     if path is not None:
         return path
+    _binary(target, "wb")
     if not hasattr(target, "write"):
         raise TypeError(f"expected a path or a binary file object, got {type(target).__name__}")
     return target
 
 
+#: Integer arguments are 64-bit signed integers in the extension.
+_I64 = 2**63
+
+
+def _int(name: str, value: object) -> int:
+    """`value`, which must be an `int` (not a `bool`) of 64 bits; the extension checks the
+    range that makes sense."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an int, got {type(value).__name__}")
+    if not -_I64 <= value < _I64:
+        raise PcodecError(f"{name} {value} is out of range")
+    return value
+
+
+def _optional_int(name: str, value: object) -> int | None:
+    return None if value is None else _int(name, value)
+
+
+def _names(columns: Sequence[str] | None) -> list[str] | None:
+    """`columns` as a list; a string is not a sequence of names."""
+    if isinstance(columns, (str, bytes)):
+        raise TypeError(f"columns must be a sequence of names, not a {type(columns).__name__}")
+    return None if columns is None else list(columns)
+
+
 def _options(
-    policy: Policy, columns: Mapping[str, Policy] | None, level: int, base: str, row_group_size: int | None
+    policy: Policy,
+    columns: Mapping[str, Policy] | None,
+    level: int,
+    base: str,
+    row_group_size: int | None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
+        "encodings": dict(encodings or {}),
         "policy": policy,
         "columns": dict(columns or {}),
-        "level": level,
+        "level": _int("level", level),
         "base": base,
-        "row_group_size": row_group_size,
+        "row_group_size": _optional_int("row_group_size", row_group_size),
     }
 
 
@@ -186,13 +232,20 @@ class ParquetFile:
 
     def empty(self, columns: Sequence[str] | None = None) -> _lib.RecordBatchStream:
         """A stream with the schema `stream(columns)` has and no rows."""
-        return self._file.empty(None if columns is None else list(columns))
+        return self._file.empty(_names(columns))
 
     def integer_bounds(self) -> list[dict[str, tuple[int, int]]]:
         """Per row group, `{leaf path: (min, max)}` from the statistics of its `INT32` and
         `INT64` leaves, as stored (signed; timestamps in their unit, dates in days). Leaves
-        without both bounds are left out."""
+        without both bounds are left out, and so are dotted paths that name two leaves (a
+        top-level column `a.b` and the field `b` of a struct `a`)."""
         return self._file.integer_bounds()
+
+    def _column_bounds(self) -> tuple[dict[str, str], list[dict[str, tuple[int, int]]]]:
+        """How each top-level column of signed integers, dates or timestamps is stored
+        (`int`, `date32`, `date64`, `timestamp[<unit>]`), and per row group `{name: (min,
+        max)}` from its statistics: what `tparquet.polars` prunes row groups with."""
+        return self._file.column_bounds()
 
     def stream(
         self,
@@ -207,10 +260,10 @@ class ParquetFile:
         order given; `limit` caps the number of rows.
         """
         return self._file.stream(
-            None if columns is None else list(columns),
-            None if row_groups is None else list(row_groups),
-            batch_size,
-            limit,
+            _names(columns),
+            None if row_groups is None else [_int("row_groups", rg) for rg in row_groups],
+            _int("batch_size", batch_size),
+            _optional_int("limit", limit),
         )
 
     def iter_batches(
@@ -285,7 +338,10 @@ class Writer:
     base codec is smaller on the first batch with rows; `"pcodec"` and `"base"` force one.
     `columns` maps a top-level name or a dotted leaf path to its own policy. `level` is the
     pcodec level (0 to 12), `base` the codec of the other columns (`"zstd(3)"`, `"snappy"`,
-    `"uncompressed"`...), and `row_group_size` the most rows per row group.
+    `"uncompressed"`...), and `row_group_size` the most rows per row group. `encodings` maps a
+    column, named as in `columns`, to the Parquet encoding it is written with when it gets the
+    base codec (`"ALP"`, `"BYTE_STREAM_SPLIT"`, `"DELTA_BINARY_PACKED"`...), without a
+    dictionary; PCODEC columns are always PLAIN.
     """
 
     def __init__(
@@ -298,11 +354,11 @@ class Writer:
         # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
         base: str = "zstd(3)",  # pragma: no mutate
         row_group_size: int | None = None,
+        encodings: Mapping[str, str] | None = None,
     ) -> None:
         target = _sink(sink)
-        self._path = target if isinstance(target, str) else None
         capsule = _schema_capsule(schema)
-        self._writer = _lib.Writer(target, capsule, _options(policy, columns, level, base, row_group_size))
+        self._writer = _lib.Writer(target, capsule, _options(policy, columns, level, base, row_group_size, encodings))
 
     def write(self, data: ArrowData) -> None:
         """Writes a table, a record batch, or any object with `__arrow_c_stream__` or
@@ -322,10 +378,9 @@ class Writer:
         return self._writer.close()
 
     def abort(self) -> None:
-        """Abandons the file without a footer, removing it when the writer created it."""
+        """Abandons the file without a footer, removing it when the writer created it; does
+        nothing once the writer is closed or aborted."""
         self._writer.abort()
-        if self._path is not None:
-            os.remove(self._path)
 
     @property
     def codecs(self) -> dict[str, str] | None:
@@ -369,6 +424,7 @@ def write_table(
     # "ZSTD(3)" (a mutant) names the same codec as "zstd(3)": no test can tell them apart
     base: str = "zstd(3)",  # pragma: no mutate
     row_group_size: int | None = None,
+    encodings: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Writes Arrow data to a Parquet file with PCODEC where the policy selects it.
 
@@ -378,11 +434,15 @@ def write_table(
     """
     first, second = _capsules(data)
     target = _sink(sink)
-    options = _options(policy, columns, level, base, row_group_size)
+    options = _options(policy, columns, level, base, row_group_size, encodings)
     if second is None:
         return _lib.write_stream(target, first, options)
     writer = _lib.Writer(target, first, options)
-    writer.write_batch(first, second)
+    try:
+        writer.write_batch(first, second)
+    except BaseException:
+        writer.abort()
+        raise
     return writer.close()
 
 

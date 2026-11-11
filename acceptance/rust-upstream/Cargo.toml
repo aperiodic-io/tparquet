@@ -10,4 +10,5 @@ publish = false
 [workspace]
 
 [dev-dependencies]
+bytes = "1"
 parquet = { version = "=60.1.0", default-features = false, features = ["arrow", "zstd", "snap"] }

@@ -5,10 +5,12 @@
 //	tparquet-go-gen DIR
 //
 // With -check it instead reads every DIR/files/*.parquet and compares it with
-// DIR/expected/<name>.jsonl.
+// DIR/expected/<name>.jsonl, and decodes every payload of DIR/payloads/manifest.json if
+// there is one.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -42,6 +44,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "%d vectors match\n", n)
+		n, err = vectors.CheckPayloads(dir)
+		if errors.Is(err, vectors.ErrNoPayloads) {
+			return 0
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%d payloads match\n", n)
 		return 0
 	}
 	names, err := vectors.Generate(dir)

@@ -29,10 +29,10 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
     ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
-    OffsetSizeTrait,
+    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, OffsetSizeTrait,
 };
-use arrow_buffer::{Buffer, IntervalDayTime, i256};
+use arrow_buffer::{Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -245,7 +245,15 @@ impl ArrayReader for FixedLenByteArrayReader {
                         Arc::new(IntervalDayTimeArray::from_unary(&binary, f)) as ArrayRef
                     }
                     IntervalUnit::MonthDayNano => {
-                        return Err(nyi_err!("MonthDayNano intervals not supported"));
+                        // all three fields; the milliseconds are unsigned, as the spec says
+                        let f = |b: &[u8]| {
+                            IntervalMonthDayNano::new(
+                                i32::from_le_bytes(b[0..4].try_into().unwrap()),
+                                i32::from_le_bytes(b[4..8].try_into().unwrap()),
+                                u32::from_le_bytes(b[8..12].try_into().unwrap()) as i64 * 1_000_000,
+                            )
+                        };
+                        Arc::new(IntervalMonthDayNanoArray::from_unary(&binary, f)) as ArrayRef
                     }
                 }
             }
@@ -615,6 +623,71 @@ mod tests {
     use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
     use std::sync::Arc;
+
+    #[test]
+    fn test_interval_month_day_nano() {
+        use crate::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+        use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
+        use crate::file::writer::SerializedFileWriter;
+        use crate::schema::parser::parse_message_type;
+        use arrow_array::IntervalMonthDayNanoArray;
+        use arrow_buffer::IntervalMonthDayNano;
+        use arrow_schema::Schema;
+
+        // an INTERVAL column as other writers store it: months, days and milliseconds, each
+        // an unsigned little-endian u32 (LogicalTypes.md), all three in use
+        let schema = "message s { optional fixed_len_byte_array(12) v (INTERVAL); }";
+        let schema = Arc::new(parse_message_type(schema).unwrap());
+        let raw = |months: u32, days: u32, millis: u32| {
+            let bytes = [
+                months.to_le_bytes(),
+                days.to_le_bytes(),
+                millis.to_le_bytes(),
+            ]
+            .concat();
+            FixedLenByteArray::from(bytes)
+        };
+        let mut file = vec![];
+        let mut writer = SerializedFileWriter::new(&mut file, schema, Default::default()).unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let values = [raw(14, 3, 14_706_789), raw(0, 0, 3_600_000_000)];
+        column
+            .typed::<FixedLenByteArrayType>()
+            .write_batch(&values, Some(&[1, 0, 1]), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+        let file = Bytes::from(file);
+
+        let hint = Schema::new(vec![Field::new(
+            "v",
+            ArrowType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )]);
+        let options = ArrowReaderOptions::new().with_schema(Arc::new(hint));
+        let mut reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options)
+                .unwrap()
+                .build()
+                .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(14, 3, 14_706_789_000_000)),
+            None,
+            Some(IntervalMonthDayNano::new(0, 0, 3_600_000_000_000_000)),
+        ]);
+        assert_eq!(batch.column(0).as_ref(), &expected as &dyn Array);
+
+        // without the hint the column stays DayTime, as upstream reads it
+        let mut reader = ParquetRecordBatchReader::try_new(file, 1024).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(
+            batch.column(0).data_type(),
+            &ArrowType::Interval(IntervalUnit::DayTime)
+        );
+    }
 
     #[test]
     fn test_pending_reservation_tracks_max_capacity() {

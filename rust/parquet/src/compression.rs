@@ -696,9 +696,9 @@ mod pcodec_codec {
                     "PcodecCodec unsupported without uncompress_size".into(),
                 ));
             };
-            let offset = output_buf.len();
-            output_buf.resize(offset + required_len, 0);
-            tparquet_core::decompress_into(input_buf, &mut output_buf[offset..])
+            // required_len comes from the page header: decompress_append allocates and
+            // writes only what the payload shows it can produce
+            tparquet_core::decompress_append(input_buf, output_buf, required_len)
                 .map_err(|e| ParquetError::External(Box::new(e)))?;
             Ok(required_len)
         }
@@ -1158,6 +1158,40 @@ mod tests {
             .decompress(&compressed, &mut vec![], Some(data.len() + 1))
             .unwrap_err();
         assert!(err.to_string().contains("pcodec payload"), "{err}");
+    }
+
+    #[test]
+    fn test_codec_pcodec_untrusted_size() {
+        // uncompress_size comes from the page header: a payload of a few bytes claiming 2 GiB
+        // is refused before the output grows to the claim
+        let options = CodecOptionsBuilder::default().build();
+        let mut codec = create_codec(CodecType::PCODEC(Default::default()), &options)
+            .unwrap()
+            .unwrap();
+        let claim = i32::MAX as usize;
+        let payloads: [&[u8]; 3] = [
+            &[1, 0, 7],
+            &[1, 1, 2, 0xff],
+            &[1, 3, 0x28, 0xB5, 0x2F, 0xFD],
+        ];
+        for payload in payloads {
+            let mut output = vec![5];
+            let err = codec
+                .decompress(payload, &mut output, Some(claim))
+                .unwrap_err();
+            assert!(err.to_string().contains("pcodec payload"), "{err}");
+            assert!(output.capacity() < 1 << 20, "{}", output.capacity());
+            assert_eq!(output, [5]);
+        }
+        // and a valid payload is appended after what the output holds
+        let mut compressed = vec![];
+        codec.compress(b"page", &mut compressed).unwrap();
+        let mut output = vec![5];
+        assert_eq!(
+            codec.decompress(&compressed, &mut output, Some(4)).unwrap(),
+            4
+        );
+        assert_eq!(output, b"\x05page");
     }
 
     #[test]

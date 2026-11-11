@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.trino.parquet.metadata.BlockMetadata;
 import io.trino.spi.Plugin;
 import io.trino.testing.MaterializedRow;
+import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
+import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -44,25 +46,42 @@ class TrinoQueriesTest
     static final long TRADES = 600_000;
     static final long PER_FILE = 200_000;
 
-    /** The vectors' columns as Hive table columns (Hive has no TIME type: temporal's time64_us is left out). */
+    /**
+     * The vectors' columns as Hive table columns. Hive has no TIME type: temporal's time64_us is left
+     * out; nor does Trino have unsigned integers: integer_types' u32 and u64, which Trino reads as
+     * signed (Testdata.readAsSigned), are left out.
+     */
     static final Map<String, String> COLUMNS = new LinkedHashMap<>();
 
     static {
         String primitives = "i32 integer, i64 bigint, f32 real, f64 double";
         String trades = "ts timestamp(9), price double, qty double, symbol varchar, venue varchar, is_buy boolean, note varchar";
         String pages = "i32 integer, f64 double, i64_opt bigint, random bigint, tag varchar";
+        COLUMNS.put("all_null_pages", "sparse bigint, tail double, none integer");
+        COLUMNS.put("auto_choice", "ts timestamp(9), regime bigint, level double");
         COLUMNS.put("decimal_floats", "price_cents double, amount_1e8 double, f32_halves real, f32_tenths real, with_exceptions double");
+        COLUMNS.put("deep_nesting", "legs array(row(id bigint, pts array(row(x double, y integer))))");
+        COLUMNS.put("dictionary_fallback", "id bigint, px double, small integer");
         COLUMNS.put("empty", primitives);
         COLUMNS.put("float_specials", "f64 double, f32 real, f64_opt double");
+        COLUMNS.put("integer_types", "i8 tinyint, i16 smallint, i32 integer, u8 smallint, u16 integer, i64 bigint, "
+                + "dec1_0 decimal(1, 0), dec9_9 decimal(9, 9), dec10_2 decimal(10, 2), dec18_0 decimal(18, 0)");
+        COLUMNS.put("key_value_metadata", primitives);
+        COLUMNS.put("large_page", "digits array(integer)");
         COLUMNS.put("lists", "ints array(bigint), levels array(double)");
+        COLUMNS.put("maps", "by_id map(integer, double), by_tag map(varchar, bigint)");
         COLUMNS.put("mixed", trades);
         COLUMNS.put("multiple_row_groups", trades);
         COLUMNS.put("nested_struct", "book row(id integer, quote row(bid double, ask double, size bigint), tags array(integer))");
         COLUMNS.put("pages_v1", pages);
         COLUMNS.put("pages_v2", pages);
+        COLUMNS.put("payload_modes", "raw bigint, pco integer, decimal double, zstd varchar, zstd_levels bigint");
+        COLUMNS.put("pcodec_levels", "level0 bigint, level1 double, level2 integer, level3 real, level4 bigint, level5 double, "
+                + "level6 integer, level7 real, level8 bigint, level9 double, level10 integer, level11 real, level12 bigint");
         COLUMNS.put("primitives_optional", primitives);
         COLUMNS.put("primitives_required", primitives);
         COLUMNS.put("standard_control", trades);
+        COLUMNS.put("statistics", primitives);
         COLUMNS.put("temporal", "ts_ms_utc timestamp(9), ts_us timestamp(9), ts_ns_utc timestamp(9), ts_ms_ny timestamp(9), date32 date, dec18_4 decimal(18, 4), dec9_2 decimal(9, 2)");
     }
 
@@ -119,6 +138,50 @@ class TrinoQueriesTest
         return COLUMNS.keySet().stream();
     }
 
+    /** A vector's table columns, name and type, split at the top-level commas of its COLUMNS entry. */
+    static List<String[]> columns(String name)
+    {
+        List<String[]> out = new ArrayList<>();
+        String columns = COLUMNS.get(name);
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i <= columns.length(); i++) {
+            char c = i < columns.length() ? columns.charAt(i) : ',';
+            if (c == '(') {
+                depth++;
+            }
+            else if (c == ')') {
+                depth--;
+            }
+            else if (c == ',' && depth == 0) {
+                out.add(columns.substring(start, i).trim().split(" ", 2));
+                start = i + 1;
+            }
+        }
+        return out;
+    }
+
+    /** The select list of a vector's table for set operations: Trino cannot order maps, so a map is its entries. */
+    static String setColumns(String name)
+    {
+        List<String> out = new ArrayList<>();
+        for (String[] c : columns(name)) {
+            out.add(c[1].startsWith("map(") ? "map_entries(" + c[0] + ") AS " + c[0] : c[0]);
+        }
+        return String.join(", ", out);
+    }
+
+    /** Trino refuses the vector and its standard copy alike, when it opens the split (Testdata.trinoRefuses). */
+    static void assertTrinoRefuses(String name)
+    {
+        for (String table : List.of("v_" + name, "s_" + name)) {
+            assertThatThrownBy(() -> trino.execute("SELECT count(*) FROM " + table)).as(table)
+                    .hasMessageStartingWith("Error opening Hive split ")
+                    .hasStackTraceContaining("java.lang.NullPointerException")
+                    .hasStackTraceContaining("io.trino.parquet.metadata.ParquetMetadata.keyValueMetaData");
+        }
+    }
+
     static Map<String, Long> manifestRows()
             throws IOException
     {
@@ -136,11 +199,28 @@ class TrinoQueriesTest
         assertThat(COLUMNS.keySet()).containsExactlyInAnyOrderElementsOf(Testdata.vectorNames());
     }
 
+    @Test
+    void everyTableColumnIsATopLevelColumnOfItsVector()
+            throws IOException
+    {
+        for (String name : COLUMNS.keySet()) {
+            List<String> fields;
+            try (ParquetFileReader r = ParquetFileReader.open(new LocalInputFile(Testdata.file(name)))) {
+                fields = r.getFooter().getFileMetaData().getSchema().getFields().stream().map(org.apache.parquet.schema.Type::getName).toList();
+            }
+            assertThat(columns(name).stream().map(c -> c[0]).toList()).as(name).isNotEmpty().isSubsetOf(fields);
+        }
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("vectors")
     void everyVectorQueriesAsItsStandardCopy(String name)
             throws IOException
     {
+        if (Testdata.trinoRefuses(name)) {
+            assertTrinoRefuses(name);
+            return;
+        }
         long rows = manifestRows().get(name);
         assertThat(trino.value("SELECT count(*) FROM v_" + name)).isEqualTo(rows);
         assertThat(trino.value("SELECT count(*) FROM s_" + name)).isEqualTo(rows);
@@ -148,18 +228,22 @@ class TrinoQueriesTest
         List<MaterializedRow> got = trino.rows("SELECT * FROM v_" + name);
         assertThat(got).hasSize((int) rows).containsExactlyElementsOf(trino.rows("SELECT * FROM s_" + name));
         // and as sets, the way SQL compares them
-        assertThat(trino.rows("SELECT * FROM v_" + name + " EXCEPT ALL SELECT * FROM s_" + name)).isEmpty();
-        assertThat(trino.rows("SELECT * FROM s_" + name + " EXCEPT ALL SELECT * FROM v_" + name)).isEmpty();
+        String select = "SELECT " + setColumns(name) + " FROM ";
+        assertThat(trino.rows(select + "v_" + name + " EXCEPT ALL " + select + "s_" + name)).isEmpty();
+        assertThat(trino.rows(select + "s_" + name + " EXCEPT ALL " + select + "v_" + name)).isEmpty();
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("vectors")
     void floatsAreTheirBits(String name)
     {
+        if (Testdata.trinoRefuses(name)) {
+            assertTrinoRefuses(name);
+            return;
+        }
         // the IEEE 754 bits of every top-level float column, NaN payloads and signed zeros included
         List<String> bits = new ArrayList<>();
-        for (String column : COLUMNS.get(name).split(", (?![^(]*\\))")) {
-            String[] c = column.split(" ", 2);
+        for (String[] c : columns(name)) {
             if (c[1].equals("double")) {
                 bits.add("to_hex(to_ieee754_64(" + c[0] + "))");
             }

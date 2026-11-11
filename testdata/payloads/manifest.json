@@ -9,6 +9,7 @@
       "mode": "RAW",
       "name": "raw_empty",
       "payload": "raw_empty.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -19,6 +20,7 @@
       "mode": "RAW",
       "name": "raw_random",
       "payload": "raw_random.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -29,6 +31,7 @@
       "mode": "RAW",
       "name": "raw_random_no_hint",
       "payload": "raw_random_no_hint.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -39,6 +42,7 @@
       "mode": "PCO",
       "name": "pco_int32",
       "payload": "pco_int32.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -49,6 +53,7 @@
       "mode": "PCO",
       "name": "pco_int64",
       "payload": "pco_int64.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -59,6 +64,7 @@
       "mode": "PCO",
       "name": "pco_int64_level0",
       "payload": "pco_int64_level0.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -69,6 +75,7 @@
       "mode": "PCO",
       "name": "pco_int64_level12",
       "payload": "pco_int64_level12.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -79,6 +86,7 @@
       "mode": "PCO",
       "name": "pco_float",
       "payload": "pco_float.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -89,6 +97,7 @@
       "mode": "PCO",
       "name": "pco_double",
       "payload": "pco_double.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -99,6 +108,7 @@
       "mode": "DECIMAL",
       "name": "decimal_double",
       "payload": "decimal_double.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -109,6 +119,7 @@
       "mode": "DECIMAL",
       "name": "decimal_float",
       "payload": "decimal_float.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -119,6 +130,7 @@
       "mode": "DECIMAL",
       "name": "decimal_exceptions",
       "payload": "decimal_exceptions.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -129,6 +141,7 @@
       "mode": "ZSTD",
       "name": "zstd_no_hint",
       "payload": "zstd_no_hint.bin",
+      "reference_encoding": true,
       "valid": true
     },
     {
@@ -139,6 +152,40 @@
       "mode": "ZSTD",
       "name": "zstd_width_mismatch",
       "payload": "zstd_width_mismatch.bin",
+      "reference_encoding": true,
+      "valid": true
+    },
+    {
+      "decoded": "pco_no_values.out",
+      "expected_len": 0,
+      "hint": "INT64",
+      "level": 8,
+      "mode": "PCO",
+      "name": "pco_no_values",
+      "payload": "pco_no_values.bin",
+      "reference_encoding": false,
+      "valid": true
+    },
+    {
+      "decoded": "decimal_no_values.out",
+      "expected_len": 0,
+      "hint": "DOUBLE",
+      "level": 8,
+      "mode": "DECIMAL",
+      "name": "decimal_no_values",
+      "payload": "decimal_no_values.bin",
+      "reference_encoding": false,
+      "valid": true
+    },
+    {
+      "decoded": "zstd_empty_frame.out",
+      "expected_len": 0,
+      "hint": null,
+      "level": 8,
+      "mode": "ZSTD",
+      "name": "zstd_empty_frame",
+      "payload": "zstd_empty_frame.bin",
+      "reference_encoding": false,
       "valid": true
     },
     {
@@ -287,6 +334,52 @@
       "name": "zstd_corrupt",
       "payload": "zstd_corrupt.bin",
       "valid": false
+    },
+    {
+      "error": "pcodec payload: truncated",
+      "expected_len": 0,
+      "name": "zstd_empty_body",
+      "payload": "zstd_empty_body.bin",
+      "valid": false
+    },
+    {
+      "error": "pcodec payload: 3 bytes after the pcodec file",
+      "expected_len": 16000,
+      "name": "pco_trailing_bytes",
+      "payload": "pco_trailing_bytes.bin",
+      "valid": false
+    },
+    {
+      "error": "pcodec payload: 3 bytes after the pcodec file",
+      "expected_len": 16000,
+      "name": "decimal_trailing_bytes",
+      "payload": "decimal_trailing_bytes.bin",
+      "valid": false
+    },
+    {
+      "error": "pcodec payload: truncated",
+      "expected_len": 16000,
+      "name": "varint_too_long",
+      "payload": "varint_too_long.bin",
+      "valid": false
+    },
+    {
+      "error": "pcodec payload: truncated",
+      "expected_len": 16000,
+      "name": "varint_overflow",
+      "payload": "varint_overflow.bin",
+      "valid": false
+    },
+    {
+      "decoded": "varint_overlong.out",
+      "expected_len": 16000,
+      "hint": "DOUBLE",
+      "level": 8,
+      "mode": "DECIMAL",
+      "name": "varint_overlong",
+      "payload": "varint_overlong.bin",
+      "reference_encoding": false,
+      "valid": true
     }
   ]
 }

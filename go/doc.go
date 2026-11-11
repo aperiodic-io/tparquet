@@ -1,4 +1,4 @@
-// Package pcodec adds PCODEC, pcodec as a Parquet compression codec (spec/FORMAT.md of
+// Package tparquet adds PCODEC, pcodec as a Parquet compression codec (spec/FORMAT.md of
 // github.com/aperiodic-io/tparquet), to Apache arrow-go.
 //
 // # Reading
@@ -15,7 +15,7 @@
 // # Writing
 //
 // FileWriter chooses each column's codec with a Policy: Auto (the default) writes the first
-// record batch with the base codec and with PCODEC and keeps the smaller per column, Pcodec
+// record batch with rows with the base codec and with PCODEC and keeps the smaller per column, Pcodec
 // and Base force one. The base codec is ZSTD level 3 unless WithBaseCodec says otherwise.
 // PCODEC columns are written as the spec recommends: PLAIN, no dictionary, data page V2, and
 // the column's physical type as the encoder's type hint. Files with a PCODEC column get
@@ -54,4 +54,9 @@
 // or, with the Makefile, make test TPARQUET_LIB_DIR=/path/to. On Linux the library also needs
 // -lgcc_s -lutil -lrt -lpthread -lm -ldl, which the package adds itself. Only linux/amd64 is
 // tested.
+//
+// The library must have the ABI version of the vendored header (PCP_ABI_VERSION). The package
+// checks it once at init without panicking; with another version every codec call fails with
+// an error that says so (Decode and EncodeLevel, which have no error result, panic with it),
+// and NewPlan and NewFileWriter return it, before the library is called.
 package tparquet

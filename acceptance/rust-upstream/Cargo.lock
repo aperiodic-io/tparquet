@@ -6,6 +6,7 @@ version = 4
 name = "acceptance-rust-upstream"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "parquet",
 ]
 

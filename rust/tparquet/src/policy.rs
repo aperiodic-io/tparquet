@@ -49,9 +49,9 @@ pub fn parse_column_policy(s: &str) -> Result<(String, Policy)> {
     }
 }
 
-/// The policy of the leaf at `path` (dotted, as `ColumnPath::string` gives it): the longest
-/// override that names the leaf or one of its ancestors, else `default`.
-pub(crate) fn resolve(path: &str, overrides: &[(String, Policy)], default: Policy) -> Policy {
+/// The policy of the leaf at `path` (its field names, as `ColumnPath::parts` gives them): the
+/// longest override that names the leaf or one of its ancestors, else `default`.
+pub(crate) fn resolve(path: &[String], overrides: &[(String, Policy)], default: Policy) -> Policy {
     overrides
         .iter()
         .filter(|(name, _)| covers(name, path))
@@ -59,9 +59,11 @@ pub(crate) fn resolve(path: &str, overrides: &[(String, Policy)], default: Polic
         .map_or(default, |&(_, p)| p)
 }
 
-/// Whether the override `name` applies to the leaf `path`.
-pub(crate) fn covers(name: &str, path: &str) -> bool {
-    path.strip_prefix(name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+/// Whether the override `name` applies to the leaf `path`: `name` is the dotted path of the
+/// leaf or of one of its ancestors. Field names may hold dots themselves, so a top-level
+/// field `a.b` is not inside a field `a`.
+pub(crate) fn covers(name: &str, path: &[String]) -> bool {
+    (1..=path.len()).any(|n| path[..n].join(".") == name)
 }
 
 #[cfg(test)]
@@ -87,6 +89,10 @@ mod tests {
         assert!(parse_column_policy("x=nope").is_err());
     }
 
+    fn path(p: &str) -> Vec<String> {
+        p.split('.').map(String::from).collect()
+    }
+
     #[test]
     fn longest_ancestor_wins() {
         let o = vec![
@@ -94,19 +100,28 @@ mod tests {
             ("s.inner.x".to_string(), Policy::Base),
             ("t".to_string(), Policy::Base),
         ];
-        assert_eq!(resolve("s.inner.x", &o, Policy::Auto), Policy::Base);
-        assert_eq!(resolve("s.inner.y", &o, Policy::Auto), Policy::Pcodec);
-        assert_eq!(resolve("s", &o, Policy::Auto), Policy::Pcodec);
-        assert_eq!(resolve("st", &o, Policy::Auto), Policy::Auto);
-        assert_eq!(resolve("u", &o, Policy::Base), Policy::Base);
-        assert_eq!(resolve("t.list.element", &o, Policy::Pcodec), Policy::Base);
+        assert_eq!(resolve(&path("s.inner.x"), &o, Policy::Auto), Policy::Base);
+        assert_eq!(resolve(&path("s.inner.y"), &o, Policy::Auto), Policy::Pcodec);
+        assert_eq!(resolve(&path("s"), &o, Policy::Auto), Policy::Pcodec);
+        assert_eq!(resolve(&path("st"), &o, Policy::Auto), Policy::Auto);
+        assert_eq!(resolve(&path("u"), &o, Policy::Base), Policy::Base);
+        assert_eq!(resolve(&path("t.list.element"), &o, Policy::Pcodec), Policy::Base);
     }
 
     #[test]
     fn covers_whole_names_only() {
-        assert!(covers("a", "a"));
-        assert!(covers("a", "a.b"));
-        assert!(!covers("a", "ab"));
-        assert!(!covers("a.b", "a"));
+        assert!(covers("a", &path("a")));
+        assert!(covers("a", &path("a.b")));
+        assert!(covers("a.b", &path("a.b")));
+        assert!(!covers("a", &path("ab")));
+        assert!(!covers("a.b", &path("a")));
+        assert!(!covers("a.", &path("a.b")));
+        assert!(!covers("", &path("a")));
+        // field names with dots
+        let dotted = vec!["a.b".to_string(), "c".to_string()];
+        assert!(!covers("a", &dotted));
+        assert!(covers("a.b", &dotted));
+        assert!(covers("a.b.c", &dotted));
+        assert!(!covers("b.c", &dotted));
     }
 }

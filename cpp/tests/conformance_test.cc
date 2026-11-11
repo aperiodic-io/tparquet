@@ -27,8 +27,8 @@ std::string Expected(const std::filesystem::path& file) {
 
 TEST(Conformance, ThereAreVectors) {
   auto files = VectorFiles();
-  EXPECT_GE(files.size(), 13u);
-  EXPECT_EQ(files.front().filename(), "decimal_floats.parquet");
+  EXPECT_GE(files.size(), 24u);
+  EXPECT_EQ(files.front().filename(), "all_null_pages.parquet");
 }
 
 TEST(Conformance, TheForkReadsEveryVector) {

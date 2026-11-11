@@ -294,3 +294,185 @@ fn auto_counts_the_cost_of_v2_pages() {
     assert_eq!(auto.len(), base.len());
     assert_eq!(lines(&auto), batch_lines(&[batch]));
 }
+
+#[test]
+fn column_names_with_dots() {
+    // a top-level field `a.b` is not inside a struct `a`; a struct `s` with a child `x` and a
+    // field `s.x` both have the dotted path `s.x`, which names both
+    let ints = |k: i64| Arc::new(Int64Array::from_iter_values((0..N as i64).map(|i| i * k))) as ArrayRef;
+    let s = StructArray::from(vec![(Arc::new(Field::new("x", DataType::Int64, false)), ints(2))]);
+    let batch = RecordBatch::try_from_iter([
+        ("a", ints(1)),
+        ("a.b", ints(3)),
+        ("s", Arc::new(s) as ArrayRef),
+        ("s.x", ints(4)),
+    ])
+    .unwrap();
+    let pcodec = || WriterOptions::default().with_policy(Policy::Pcodec);
+    let (file, _) = write(std::slice::from_ref(&batch), pcodec().with_column("a", Policy::Base));
+    assert_eq!(codecs(&file), pairs(&[("a", "ZSTD"), ("a.b", "PCODEC"), ("s.x", "PCODEC"), ("s.x", "PCODEC")]));
+    let (file, _) = write(std::slice::from_ref(&batch), pcodec().with_column("a.b", Policy::Base));
+    assert_eq!(codecs(&file), pairs(&[("a", "PCODEC"), ("a.b", "ZSTD"), ("s.x", "PCODEC"), ("s.x", "PCODEC")]));
+    let (file, _) = write(std::slice::from_ref(&batch), pcodec().with_column("s", Policy::Base));
+    assert_eq!(codecs(&file), pairs(&[("a", "PCODEC"), ("a.b", "PCODEC"), ("s.x", "ZSTD"), ("s.x", "PCODEC")]));
+    let (file, _) = write(std::slice::from_ref(&batch), pcodec().with_column("s.x", Policy::Base));
+    assert_eq!(codecs(&file), pairs(&[("a", "PCODEC"), ("a.b", "PCODEC"), ("s.x", "ZSTD"), ("s.x", "ZSTD")]));
+    // `a.` and `.b` name nothing
+    for name in ["a.", ".b", "a.b.c"] {
+        let err = Writer::try_new(Vec::new(), batch.schema(), pcodec().with_column(name, Policy::Base)).err().unwrap();
+        assert_eq!(err.to_string(), format!("no column named {name:?}"));
+    }
+    assert_eq!(lines(&file), batch_lines(&[batch]));
+}
+
+#[test]
+fn codecs_report_the_codecs_of_the_properties() {
+    // per-column codecs set in the properties stay on the base columns, and the writer says so
+    let batch = mixed(N, 13);
+    let gzip = Compression::GZIP(GzipLevel::default());
+    let props = WriterProperties::builder()
+        .set_column_compression("name".into(), Compression::SNAPPY)
+        .set_column_compression("flag".into(), gzip)
+        .build();
+    for policy in [Policy::Auto, Policy::Base, Policy::Pcodec] {
+        let options = WriterOptions::default().with_policy(policy).with_properties(props.clone());
+        let (file, chosen) = write(std::slice::from_ref(&batch), options.clone());
+        let chosen: Vec<(String, Compression)> = chosen.unwrap().into_iter().map(|c| (c.path, c.codec)).collect();
+        let in_file = codecs(&file);
+        for ((path, codec), (file_path, file_codec)) in chosen.iter().zip(&in_file) {
+            assert_eq!(path, file_path);
+            assert!(codec.to_string().starts_with(file_codec.as_str()), "{policy:?} {path}: {codec} vs {file_codec}");
+        }
+        assert_eq!(chosen[3].1, Compression::SNAPPY);
+        if policy != Policy::Pcodec {
+            assert_eq!(chosen[2].1, gzip);
+        }
+        let (_, finished) = Writer::try_new(Vec::new(), batch.schema(), options).unwrap().finish().unwrap();
+        assert_eq!(finished[3].codec, Compression::SNAPPY);
+    }
+}
+
+#[test]
+fn the_footer_key_says_whether_the_file_has_pcodec() {
+    // key-value metadata copied from another file cannot make the key lie
+    use tparquet::parquet::file::metadata::KeyValue;
+    let batch = mixed(N, 14);
+    let kv = |v: &str| KeyValue::new("parquet.pcodec.version".to_string(), v.to_string());
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![kv("0"), KeyValue::new("k".into(), "v".to_string()), kv("1")]))
+        .build();
+    let footer = |file: &bytes::Bytes| {
+        let r = tparquet::parquet::file::reader::SerializedFileReader::new(file.clone()).unwrap();
+        use tparquet::parquet::file::reader::FileReader;
+        let kv = r.metadata().file_metadata().key_value_metadata().cloned().unwrap_or_default();
+        kv.into_iter().filter(|kv| kv.key != "ARROW:schema").map(|kv| (kv.key, kv.value.unwrap())).collect::<Vec<_>>()
+    };
+    for (policy, want) in
+        [(Policy::Pcodec, vec![("k", "v"), ("parquet.pcodec.version", "1")]), (Policy::Base, vec![("k", "v")])]
+    {
+        let options = WriterOptions::default().with_policy(policy).with_properties(props.clone());
+        let (file, _) = write(std::slice::from_ref(&batch), options);
+        let want: Vec<(String, String)> = want.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        assert_eq!(footer(&file), want, "{policy:?}");
+    }
+}
+
+#[test]
+fn a_rejected_first_batch_leaves_the_writer_usable() {
+    // as with every other batch, and with the forced policies: the batch is refused, the
+    // file goes on
+    let good = mixed(N, 15);
+    let wrong = RecordBatch::try_from_iter([
+        ("ts", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+        ("price", Arc::new(Float64Array::from(vec![1.0]))),
+        ("flag", Arc::new(Int64Array::from(vec![1]))),
+        ("name", Arc::new(StringArray::from(vec!["x"]))),
+    ])
+    .unwrap();
+    for policy in [Policy::Auto, Policy::Pcodec, Policy::Base] {
+        let mut out = Vec::new();
+        let mut w = Writer::try_new(&mut out, good.schema(), WriterOptions::default().with_policy(policy)).unwrap();
+        let err = w.write(&wrong).unwrap_err().to_string();
+        assert!(err.contains("Incompatible type. Field 'ts' has type Timestamp"), "{policy:?}: {err}");
+        if policy == Policy::Auto {
+            assert!(w.codecs().is_none());
+        }
+        w.write(&good).unwrap();
+        let (metadata, chosen) = w.finish().unwrap();
+        assert_eq!(metadata.file_metadata().num_rows(), N as i64);
+        if policy == Policy::Auto {
+            assert_eq!(chosen[0].codec, Compression::PCODEC(Default::default()));
+        }
+        assert_eq!(lines(&bytes::Bytes::from(out)), batch_lines(std::slice::from_ref(&good)));
+    }
+}
+
+#[test]
+fn base_codecs_parse_or_fail_cleanly() {
+    use tparquet::parse_base;
+    assert_eq!(parse_base("zstd(3)").unwrap(), tparquet::writer::default_base());
+    assert_eq!(parse_base("ZSTD(3)").unwrap(), tparquet::writer::default_base());
+    assert_eq!(parse_base("snappy").unwrap(), Compression::SNAPPY);
+    assert_eq!(parse_base("gzip(9)").unwrap(), Compression::GZIP(GzipLevel::try_new(9).unwrap()));
+    assert_eq!(parse_base("uncompressed").unwrap(), Compression::UNCOMPRESSED);
+    let message = |s: &str| parse_base(s).unwrap_err().to_string();
+    assert_eq!(message("pcodec(3)"), "the base codec cannot be PCODEC");
+    assert_eq!(message("lzo"), "the base codec cannot be LZO: no Parquet writer implements it");
+    for bad in ["zstd(", "zstd(3", "zstd(3x", "zstd(3)x", "gzip(é", "zstd)(", "("] {
+        assert_eq!(message(bad), format!("base codec {bad:?}: expected NAME or NAME(LEVEL)"), "{bad}");
+    }
+    assert_eq!(message("zstd"), "base codec \"zstd\": Parquet error: zstd requires a compression level");
+    assert_eq!(message("zstd(x)"), "base codec \"zstd(x)\": Parquet error: invalid compression level: x)");
+    assert!(message("nope").contains("unsupported compression nope"));
+}
+
+/// The encodings of every column chunk of the first row group, by leaf path.
+fn encodings(file: &bytes::Bytes) -> Vec<(String, Vec<String>)> {
+    use tparquet::parquet::file::reader::{FileReader, SerializedFileReader};
+    let reader = SerializedFileReader::new(file.clone()).unwrap();
+    let rg = reader.metadata().row_group(0);
+    rg.columns().iter().map(|c| (c.column_path().string(), c.encodings().map(|e| e.to_string()).collect())).collect()
+}
+
+#[test]
+fn column_encodings_apply_to_base_columns() {
+    use tparquet::parquet::basic::Encoding;
+    let batch = mixed(N, 9);
+    let options = WriterOptions::default()
+        .with_policy(Policy::Base)
+        .with_encoding("price", Encoding::ALP)
+        .with_encoding("ts", Encoding::DELTA_BINARY_PACKED);
+    let (file, _) = write(std::slice::from_ref(&batch), options);
+    let e = encodings(&file);
+    assert!(e[0].1.contains(&"DELTA_BINARY_PACKED".to_string()), "{e:?}");
+    assert!(e[1].1.contains(&"ALP".to_string()), "{e:?}");
+    // the others keep the dictionary
+    assert!(e[2].1.contains(&"RLE_DICTIONARY".to_string()), "{e:?}");
+    assert!(!e[1].1.contains(&"RLE_DICTIONARY".to_string()), "{e:?}");
+    assert_eq!(lines(&file), batch_lines(&[batch]));
+}
+
+#[test]
+fn pcodec_columns_ignore_their_encoding() {
+    use tparquet::parquet::basic::Encoding;
+    let batch = mixed(N, 10);
+    let options = WriterOptions::default().with_policy(Policy::Pcodec).with_encoding("price", Encoding::ALP);
+    let (file, _) = write(std::slice::from_ref(&batch), options);
+    let e = encodings(&file);
+    assert!(e[1].1.iter().all(|e| e == "PLAIN" || e == "RLE"), "{e:?}");
+    assert_eq!(lines(&file), batch_lines(&[batch]));
+}
+
+#[test]
+fn bad_column_encodings_are_errors() {
+    use tparquet::parquet::basic::Encoding;
+    let schema = mixed(1, 0).schema();
+    let error = |o: WriterOptions| Writer::try_new(Vec::new(), schema.clone(), o).err().unwrap().to_string();
+    assert_eq!(error(WriterOptions::default().with_encoding("nope", Encoding::PLAIN)), "no column named \"nope\"");
+    for e in [Encoding::PLAIN_DICTIONARY, Encoding::RLE_DICTIONARY] {
+        assert_eq!(
+            error(WriterOptions::default().with_encoding("price", e)),
+            format!("{e} is a dictionary encoding: the dictionary is the writer's default")
+        );
+    }
+}

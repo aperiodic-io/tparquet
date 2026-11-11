@@ -206,3 +206,29 @@ def test_read_into_other_arrow_libraries(tmp_path: pathlib.Path) -> None:
     out = tmp_path / "n2.parquet"
     ppc.write_table(nanoarrow.ArrayStream(ppc.read_batches(path)), out)
     assert ppc.read_table(out).equals(t)
+
+
+def test_null_arrays_with_a_buffer_are_imported(tmp_path: pathlib.Path) -> None:
+    # Polars exports Null arrays with one (null) buffer where the C data interface has none
+    import nanoarrow as na
+    import polars as pl
+
+    df = pl.DataFrame(
+        {
+            "n": pl.Series([None] * 3, dtype=pl.Null),
+            "i": [1, 2, 3],
+            "l": pl.Series([[None], [None, None], None], dtype=pl.List(pl.Null)),
+            "s": pl.Series([{"a": None}] * 3, dtype=pl.Struct({"a": pl.Null})),
+        }
+    )
+    path = tmp_path / "n.parquet"
+    assert ppc.write_table(df, path)["i"] == "PCODEC"
+    assert pl.DataFrame(ppc.read_batches(path)).equals(df)
+    # one batch through __arrow_c_array__, and through a Writer
+    batch = next(iter(na.c_array_stream(df)))
+    ppc.write_table(batch, path)
+    assert pl.DataFrame(ppc.read_batches(path)).equals(df)
+    with ppc.Writer(path, df.to_arrow().schema) as w:
+        w.write(df)
+        w.write(batch)
+    assert pl.DataFrame(ppc.read_batches(path)).equals(pl.concat([df, df]))

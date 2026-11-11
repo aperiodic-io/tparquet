@@ -45,6 +45,9 @@ race: $(DEPS)
 fuzz: $(DEPS)
 	$(GO) test $(TAGS) -run '^$$' -fuzz '^FuzzDecode$$' -fuzztime $(FUZZTIME) .
 	$(GO) test $(TAGS) -run '^$$' -fuzz '^FuzzRoundTrip$$' -fuzztime $(FUZZTIME) .
+	$(GO) test $(TAGS) -run '^$$' -fuzz '^FuzzEncodeAnyLevel$$' -fuzztime $(FUZZTIME) .
+	$(GO) test $(TAGS) -run '^$$' -fuzz '^FuzzPageInFile$$' -fuzztime $(FUZZTIME) .
+	$(GO) test $(TAGS) -run '^$$' -fuzz '^FuzzWriteRead$$' -fuzztime $(FUZZTIME) .
 
 # gremlins tests a copy of the module, where ../target does not exist: always link by path.
 # -count=1: gremlins sets the mutant timeouts from its coverage run, which must not be cached.

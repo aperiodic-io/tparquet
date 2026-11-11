@@ -1,6 +1,7 @@
 package io.aperiodic.tparquet.spark;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.aperiodic.tparquet.TparquetWriter;
 import java.nio.file.Path;
@@ -83,6 +84,16 @@ class SparkReadsVectorsTest {
     return s.read().parquet(file.toString());
   }
 
+  /**
+   * Spark itself cannot read key_value_metadata with its vectorized readers, whatever the codec:
+   * the footer has a key without a value ({@code no.value}), and
+   * SpecificParquetRecordReaderBase.toSetMultiMap puts each value in a {@code Set.of}, which
+   * refuses null. Its row reader reads the file. The PCODEC file must fail as its standard copy does.
+   */
+  static boolean sparkRefuses(String name, Reader reader) {
+    return name.equals("key_value_metadata") && reader != Reader.ROWS;
+  }
+
   @Test
   void everyVectorIsCopied() {
     assertThat(Spark.vectorNames()).hasSizeGreaterThanOrEqualTo(13);
@@ -92,6 +103,14 @@ class SparkReadsVectorsTest {
   @MethodSource("cases")
   void readsAsTheStandardCopy(String name, Reader reader) {
     Path pcodec = Spark.testdata().resolve("files").resolve(name + ".parquet");
+    if (sparkRefuses(name, reader)) {
+      for (Path f : List.of(pcodec, standard.resolve(name + ".parquet"))) {
+        assertThatThrownBy(() -> Spark.rows(read(f, reader))).as(f.toString())
+            .rootCause().isInstanceOf(NullPointerException.class)
+            .hasStackTraceContaining("SpecificParquetRecordReaderBase.toSetMultiMap");
+      }
+      return;
+    }
     Dataset<Row> got = read(pcodec, reader);
     Dataset<Row> want = read(standard.resolve(name + ".parquet"), reader);
     assertThat(got.schema()).isEqualTo(want.schema());

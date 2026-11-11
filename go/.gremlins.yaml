@@ -8,7 +8,7 @@ unleash:
   threshold:
     # gremlins v0.6.0 fails when efficacy <= threshold (internal/report/report.go:237), so
     # 100 can never pass. 99.9 still fails on a single lived mutant while there are fewer
-    # than 1000 of them (183 today).
+    # than 1000 of them (222 today).
     efficacy: 99.9
   workers: 2
   test-cpu: 1

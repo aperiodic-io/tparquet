@@ -15,6 +15,15 @@ class PayloadVectorsTest {
     return Testdata.payloads().stream().filter(Testdata.Payload::valid);
   }
 
+  /** The valid vectors the reference encoder writes (testdata/README.md); the others are made by hand. */
+  static Stream<Testdata.Payload> referenceEncoded() {
+    return valid().filter(Testdata.Payload::referenceEncoding);
+  }
+
+  static Stream<Testdata.Payload> handMade() {
+    return valid().filter(p -> !p.referenceEncoding());
+  }
+
   static Stream<Testdata.Payload> invalid() {
     return Testdata.payloads().stream().filter(p -> !p.valid());
   }
@@ -23,6 +32,9 @@ class PayloadVectorsTest {
   void theManifestHasBothKinds() {
     assertThat(valid().count()).isGreaterThanOrEqualTo(10);
     assertThat(invalid().count()).isGreaterThanOrEqualTo(10);
+    // the hand-made valid vectors, which no encoder writes, are only decoded
+    assertThat(handMade().map(Testdata.Payload::name))
+        .containsExactlyInAnyOrder("varint_overlong", "pco_no_values", "decimal_no_values", "zstd_empty_frame");
   }
 
   @ParameterizedTest(name = "{0}")
@@ -45,10 +57,20 @@ class PayloadVectorsTest {
 
   /** The vectors were written with decimal on; the same arguments give the same bytes. */
   @ParameterizedTest(name = "{0}")
-  @MethodSource("valid")
+  @MethodSource("referenceEncoded")
   void reEncodingGivesTheSamePayload(Testdata.Payload v) {
     byte[] d = v.decoded();
     assertThat(Pcodec.compress(d, 0, d.length, v.hint(), v.level(), true)).isEqualTo(v.payload());
+  }
+
+  /** A hand-made vector's hint and level re-encode its bytes to another payload, which decodes to them. */
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("handMade")
+  void reEncodingAHandMadeVectorGivesAnotherPayload(Testdata.Payload v) throws Exception {
+    byte[] d = v.decoded();
+    byte[] p = Pcodec.compress(d, 0, d.length, v.hint(), v.level(), true);
+    assertThat(p).isNotEqualTo(v.payload());
+    assertThat(Pcodec.decompress(p, v.expectedLen())).isEqualTo(d);
   }
 
   @ParameterizedTest(name = "{0}")
