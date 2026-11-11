@@ -3,8 +3,8 @@ name: pcodec-java
 # The pure Java pcodec (java/pcodec): its tests against the Rust reference (pco 1.0.4 and
 # tparquet-core, through java/pcodec/oracle), the golden vectors, and the proofs. Local
 # equivalents: java/pcodec/Makefile. VERIFICATION.md explains what each job establishes.
-# Every job runs on the organisation's Ubicloud standard Ubuntu runners (ubicloud-standard-4,
-# Ubuntu 24.04 with glibc 2.39, the reference platform VERIFICATION.md assumes).
+# Every job runs on the ubuntu-standard runners (Ubuntu 24.04 with glibc 2.39, the reference
+# platform VERIFICATION.md assumes).
 on:
   push:
     branches: [main]
@@ -37,7 +37,7 @@ env:
 
 jobs:
   parity:
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-standard
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,7 +62,7 @@ jobs:
   # the library without Rust: Java 11 bytecode on the oldest JDK parquet-java supports, and
   # the tests that need no oracle (unit tests, round trips, testdata/payloads, golden vectors)
   standalone:
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-standard
     timeout-minutes: 30
     strategy:
       matrix:
@@ -83,7 +83,7 @@ jobs:
           JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
 
   proofs:
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-standard
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,7 +97,7 @@ jobs:
 
   mutation:
     if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubicloud-standard-4
+    runs-on: ubuntu-standard
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
