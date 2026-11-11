@@ -96,7 +96,10 @@ def test_column_encodings(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
     bss = {"f64": "BYTE_STREAM_SPLIT"}
     with ppc.Writer(tmp_path / "w.parquet", numbers.schema, policy="base", encodings=bss) as w:
         w.write(numbers)
-    assert "BYTE_STREAM_SPLIT" in pq.ParquetFile(tmp_path / "w.parquet").metadata.row_group(0).column(3).encodings
+    # only strings in the asserts: pytest prints the operands of a failing one, and pyarrow's repr
+    # of a column's metadata aborts the process on a codec it does not know (PCODEC)
+    encodings = tuple(pq.ParquetFile(tmp_path / "w.parquet").metadata.row_group(0).column(3).encodings)
+    assert "BYTE_STREAM_SPLIT" in encodings
     assert ppc.read_table(tmp_path / "w.parquet").equals(numbers)
     import polars as pl
 
@@ -107,7 +110,8 @@ def test_column_encodings(tmp_path: pathlib.Path, numbers: pa.Table) -> None:
     ppd.to_parquet(numbers.to_pandas(), pandas_out, policy="base", encodings=bss)
     ppl.write_parquet(pl.DataFrame(numbers), polars_out, policy="base", encodings=bss)
     for out in (pandas_out, polars_out):
-        assert "BYTE_STREAM_SPLIT" in pq.ParquetFile(out).metadata.row_group(0).column(3).encodings, out
+        encodings = tuple(pq.ParquetFile(out).metadata.row_group(0).column(3).encodings)
+        assert "BYTE_STREAM_SPLIT" in encodings, str(out)
 
 
 @pytest.mark.parametrize(
