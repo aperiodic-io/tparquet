@@ -184,10 +184,6 @@ abstract class FloatType {
     return op(DIV, a, b);
   }
 
-  final long neg(long x) {
-    return x ^ signMask;
-  }
-
   /** {@code 1.0 / x} */
   final long inv(long x) {
     return div(one(), x);

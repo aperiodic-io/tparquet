@@ -9,7 +9,8 @@ tparquet-core as built for x86-64 Linux:
   bytes of `tparquet_core::compress` in every mode but ZSTD (see *Limits*).
 - **Decoding.** `Pco.decompress` and `PcodecPayload.decompress` accept exactly the inputs the
   reference accepts, decode them to the same numbers (bit for bit, NaN payloads included), and
-  end at the same byte. They reject the rest.
+  end at the same byte. They reject the rest; `Pco` with the reference's error kind
+  (corruption, insufficient data, invalid argument).
 
 No method proves two programs in two languages equivalent for all inputs. The claim is instead
 established in layers. Each layer covers what the one below cannot:
@@ -156,13 +157,16 @@ is covered. At scale 1 (each CI run; the weekly run is at scale 8):
 | payload encoder, every hint and level, DECIMAL on and off, and decoding back | 1,640 | 62 |
 | payload decoder on corrupted payloads | 5,632 | 3,986 |
 
-Every case agrees: the same status (ok, error, panic), and when ok the same bytes.
+Every case agrees: the same status (ok, error, panic); when ok the same bytes; when the
+reference returns a pco error, the same error kind (`PcoException.kind()` against the `pco
+{kind:?} error` of the reference's message; the exhaustive suites fold the kind into their
+digests).
 At scale 8, the weekly run's, the same suites make 1,320,799 cases (12,624 of them panics of the
 reference), and every one agrees.
 
 ## 6. Recorded vectors, conformance files, mutation testing
 
-- `vectors/pco-1.0.4.bin.gz`: 8,105 recorded requests and answers of the reference. They cover
+- `vectors/pco-1.0.4.bin.gz`: 8,123 recorded requests and answers of the reference. They cover
   compression under random configurations, chunk metadata, decoding, decoding corrupted files,
   and targeted cases: every conv1 order and dict mode (decoded and corrupted too), lookback and
   consecutive deltas, mode parameters, levels, paging specs, and large inputs whose histograms
@@ -214,6 +218,11 @@ layers found, all fixed:
 6. **The test suites themselves**: the f16 TryFloatMult/TryFloatQuant domains first ran with a
    zero parameter (always an error), and the corruption suite first skipped Dict mode, which is
    how item 2 had escaped it.
+7. **Version before bounds** (comparing error kinds, exhaustive decoding): the reference checks
+   the format version before the reader's bounds, reading a missing minor byte as its padding's
+   0, so a header cut after an unsupported major version (5 and up) is corruption; the port
+   reported insufficient data. Both rejected the input; the parity suites first compared only
+   that. Recorded vectors now cover every such cut.
 
 ## Limits
 

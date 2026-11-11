@@ -29,10 +29,12 @@ class ExhaustiveParityTest {
   static long fold(long h, Parity.Outcome out) {
     long x = FNV0;
     x = (x ^ out.status) * 0x100000001b3L;
-    if (out.status == 0) {
-      for (byte b : out.body) {
-        x = (x ^ (b & 0xffL)) * 0x100000001b3L;
-      }
+    // the bytes when ok; the pco error kind ("Corruption", ...) when an error
+    byte[] body = out.status == 0 ? out.body
+        : out.status == 1 && out.kind != null ? out.kind.getBytes(java.nio.charset.StandardCharsets.US_ASCII)
+        : new byte[0];
+    for (byte b : body) {
+      x = (x ^ (b & 0xffL)) * 0x100000001b3L;
     }
     return Long.rotateLeft((h ^ x) * 0x9e3779b97f4a7c15L, 29);
   }
@@ -123,7 +125,7 @@ class ExhaustiveParityTest {
       FloatType f = FloatType.of(t);
       long one = f.one();
       long[] xs = {
-        0, f.signMask, one, f.neg(one), f.exp2(1), f.exp2(-1), f.fromF64(0.1), f.fromF64(-0.1),
+        0, f.signMask, one, one ^ f.signMask, f.exp2(1), f.exp2(-1), f.fromF64(0.1), f.fromF64(-0.1),
         f.fromF64(3.0), f.fromF64(0.3), f.fromF64(100.25), f.expMask, f.signMask | f.expMask,
         f.expMask | 1, f.defaultNan, f.expMask | f.quietBit | 5, 1, f.signMask | 1,
         f.expMask - 1, f.maxForSampling(), f.fromF64(1e-3), f.fromF64(1024.0), one + 1, one - 1

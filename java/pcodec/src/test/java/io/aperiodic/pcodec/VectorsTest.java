@@ -18,9 +18,9 @@ class VectorsTest {
     for (Vectors.Record rec : records) {
       Parity.Outcome got = Vectors.java(rec.request);
       statuses[rec.status]++;
-      boolean same = got.status == rec.status && (rec.status != 0 || Arrays.equals(got.body, rec.body));
-      if (!same && fails.size() < 10) {
-        fails.add("request " + records.indexOf(rec) + ": recorded status " + rec.status + ", java " + got);
+      String d = Parity.compare(new Oracle.Answer(rec.status, rec.body), got);
+      if (d != null && fails.size() < 10) {
+        fails.add("request " + records.indexOf(rec) + ": " + d);
       }
     }
     if (!fails.isEmpty()) {

@@ -11,16 +11,25 @@ final class Parity {
     final int status;
     final byte[] body;
     final String detail;
+    /** a PcoException's kind as the reference names it (e.g. "InsufficientData"), else null */
+    final String kind;
 
     Outcome(int status, byte[] body, String detail) {
+      this(status, body, detail, null);
+    }
+
+    Outcome(int status, byte[] body, String detail, String kind) {
       this.status = status;
       this.body = body;
       this.detail = detail;
+      this.kind = kind;
     }
 
     @Override
     public String toString() {
-      return status == 0 ? "ok(" + body.length + " bytes)" : (status == 1 ? "error: " : "panic: ") + detail;
+      return status == 0
+          ? "ok(" + body.length + " bytes)"
+          : (status == 1 ? "error" + (kind == null ? "" : " " + kind) + ": " : "panic: ") + detail;
     }
   }
 
@@ -32,16 +41,45 @@ final class Parity {
     try {
       return new Outcome(0, r.run(), null);
     } catch (PcoException e) {
-      return new Outcome(1, null, e.getMessage());
+      return new Outcome(1, null, e.getMessage(), rustKind(e.kind()));
     } catch (PcoPanic | IndexOutOfBoundsException | ArithmeticException | NegativeArraySizeException e) {
       return new Outcome(2, null, e.toString());
     }
   }
 
-  /** null if the outcomes agree (status, and bytes when ok), else a description */
+  /** {@code pco::errors::ErrorKind}'s Debug name */
+  static String rustKind(PcoException.Kind k) {
+    switch (k) {
+      case CORRUPTION:
+        return "Corruption";
+      case INSUFFICIENT_DATA:
+        return "InsufficientData";
+      default:
+        return "InvalidArgument";
+    }
+  }
+
+  private static final java.util.regex.Pattern PCO_ERROR = java.util.regex.Pattern.compile("^pco (\\w+) error: ");
+
+  /** the kind in a reference error's message (`pco {kind:?} error: ...`), or null if none */
+  static String referenceKind(Oracle.Answer a) {
+    java.util.regex.Matcher m = PCO_ERROR.matcher(a.message());
+    return m.find() ? m.group(1) : null;
+  }
+
+  /**
+   * null if the outcomes agree (status; bytes when ok; the error kind when the reference's
+   * error is a pco error), else a description
+   */
   static String compare(Oracle.Answer want, Outcome got) {
     if (want.status != got.status) {
       return "reference " + want + ", java " + got;
+    }
+    if (want.status == 1) {
+      String k = referenceKind(want);
+      if (k != null && !k.equals(got.kind)) {
+        return "reference " + want + ", java " + got;
+      }
     }
     if (want.status == 0 && !Arrays.equals(want.body, got.body)) {
       int i = 0;

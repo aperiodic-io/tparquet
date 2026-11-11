@@ -149,12 +149,14 @@ public final class Pco {
     }
     int major = r.readAlignedBytes(1)[0] & 0xff;
     int minor = major >= 4 ? r.readAlignedBytes(1)[0] & 0xff : 0;
-    r.checkInBounds();
+    // as the reference: the version is checked first (a missing minor byte reads as the
+    // padding's 0), the bounds after
     if (major > FORMAT_MAJOR) {
       throw PcoException.corruption(
           "File's format version (" + major + "." + minor + ") definitely cannot be decompressed"
               + " by this library version");
     }
+    r.checkInBounds();
     return new Header(sv, uniform, nHint, major, minor, r.bytePos());
   }
 

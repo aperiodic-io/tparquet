@@ -454,11 +454,20 @@ fn width(dtype: u8) -> usize {
     }
 }
 
-/// status and body of a call, catching a panic
+/// the kind of a pco error (`pco {kind:?} error: ...`), or nothing for any other error
+fn error_kind(message: &str) -> Vec<u8> {
+    message
+        .strip_prefix("pco ")
+        .and_then(|rest| rest.split_once(" error: "))
+        .map(|(kind, _)| kind.as_bytes().to_vec())
+        .unwrap_or_default()
+}
+
+/// status and body of a call (the error kind for an error), catching a panic
 fn guarded(f: impl FnOnce() -> Res) -> (u8, Vec<u8>) {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(b)) => (0, b),
-        Ok(Err(_)) => (1, Vec::new()),
+        Ok(Err(e)) => (1, error_kind(&e)),
         Err(_) => (2, Vec::new()),
     }
 }

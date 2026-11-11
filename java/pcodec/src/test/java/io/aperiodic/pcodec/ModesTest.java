@@ -186,4 +186,22 @@ class ModesTest {
     }
     assertArrayEquals(new long[] {l7, l5, l9, l1}, Modes.Dict.computeBid(t, nums).mode.dict);
   }
+
+  @Test
+  void floatMaxAndMinIgnoreANanOperandAsRustsDo() {
+    for (NumberType t : new NumberType[] {NumberType.F16, NumberType.F32, NumberType.F64}) {
+      FloatType f = FloatType.of(t);
+      long one = f.fromF64(1.0);
+      long two = f.fromF64(2.0);
+      long nan = f.defaultNan;
+      assertEquals(two, f.max(one, two));
+      assertEquals(two, f.max(two, one));
+      assertEquals(one, f.min(one, two));
+      assertEquals(one, f.min(two, one));
+      assertEquals(one, f.max(nan, one));
+      assertEquals(one, f.max(one, nan));
+      assertEquals(two, f.min(nan, two));
+      assertEquals(two, f.min(two, nan));
+    }
+  }
 }

@@ -96,11 +96,6 @@ final class Latent {
     return ((double) ((x >>> 1) | (x & 1))) * 2.0;
   }
 
-  /** {@code (L::Conv) l}: the latent reinterpreted in the signed convolution type. */
-  long toConv(long x) {
-    // u8 -> i16, u16 -> i32, u32 -> i64 are widening: the value is unchanged
-    return x;
-  }
 
   /** {@code L::from_conv(s)}: the signed value truncated to the latent's width. */
   long fromConv(long s) {

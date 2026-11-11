@@ -263,6 +263,20 @@ final class Vectors {
           n += 2;
         }
       }
+      // headers cut after the format version's major byte, or after its minor: the reference
+      // checks the version before the bounds, so an unsupported major is corruption, not
+      // insufficient data
+      byte[] file = o.call(Oracle.compressRequest(NumberType.I64, new Oracle.Cfg(), new long[] {5})).body;
+      int versionAt = 4 + 1 + 1 + 1; // magic, standalone version, number type, size hint
+      for (int major : new int[] {0, 3, 4, 5, 6, 255}) {
+        for (int len = 1; len <= 3; len++) {
+          byte[] cut = java.util.Arrays.copyOf(file, versionAt + len);
+          cut[versionAt] = (byte) major;
+          byte[] dec = Oracle.decompressRequest(NumberType.I64, cut);
+          write(out, dec, o.call(dec));
+          n++;
+        }
+      }
     }
     System.out.println("wrote " + n + " records to " + p);
     MathParityTest.o = o;
