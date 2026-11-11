@@ -63,10 +63,6 @@ final class Latent {
     return x & mask;
   }
 
-  static int cmp(long a, long b) {
-    return Long.compareUnsigned(a, b);
-  }
-
   static boolean lt(long a, long b) {
     return Long.compareUnsigned(a, b) < 0;
   }

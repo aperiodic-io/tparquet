@@ -7,7 +7,6 @@ import java.util.List;
 final class ChunkCompressor {
   static final int FULL_BATCH_N = 256;
   static final int MAX_ENTRIES = 1 << 24;
-  private static final double PAGE_SIZE_OVERESTIMATION = 1.2;
   private static final float LOOKBACK_REQUIRED_BYTE_SAVINGS_PER_N = 0.25f;
   private static final int LIMITED_UNOPTIMIZED_BINS_LOG = 6;
 
@@ -31,9 +30,9 @@ final class ChunkCompressor {
     LatentCompressor(Latent lt, BinOptimization.Trained trained, ChunkMeta.Bin[] bins, long[] latents) {
       this.lt = lt;
       this.needsAns = bins.length != 1;
-      List<BinOptimization.BinInfo> sorted = new ArrayList<>(trained.infos);
-      sorted.sort((a, b) -> Latent.cmp(a.lower, b.lower));
-      this.infos = sorted.toArray(new BinOptimization.BinInfo[0]);
+      // the reference sorts the bins by lower bound; trainInfos gives them in that order already
+      // (BinOptimizationTest)
+      this.infos = trained.infos.toArray(new BinOptimization.BinInfo[0]);
       this.searchSizeLog =
           infos.length <= 1 ? 0 : 1 + (31 - Integer.numberOfLeadingZeros(infos.length - 1));
       this.searchLowers = new long[Math.max(1 << searchSizeLog, infos.length)];
@@ -330,7 +329,7 @@ final class ChunkCompressor {
             Mode.CLASSIC,
             delta,
             unoptimizedBinsLog);
-    long size = c.cc.meta.maxSize() + c.cc.pageSizeHintInner(0, 1.0);
+    long size = c.cc.meta.maxSize() + c.cc.pageSizeHintInner(0);
     return RustMath.u64ToF32(size);
   }
 
@@ -502,7 +501,8 @@ final class ChunkCompressor {
     return c.cc;
   }
 
-  long pageSizeHintInner(int pageIdx, double overestimation) {
+  /** {@code page_size_hint_inner(page_idx, 1.0)}, the only use the standalone format makes of it */
+  long pageSizeHintInner(int pageIdx) {
     PageInfo info = pageInfos.get(pageIdx);
     long bodyBits = 0;
     for (int key = 0; key < 3; key++) {
@@ -511,21 +511,9 @@ final class ChunkCompressor {
       }
       long nStored = info.end[key] - info.start[key];
       double numsBits = (double) nStored * clcs[key].avgBitsPerLatent;
-      bodyBits += RustMath.f64ToUnsigned(Math.ceil(numsBits * overestimation), 64);
+      bodyBits += RustMath.f64ToUnsigned(Math.ceil(numsBits), 64);
     }
     return meta.exactPageMetaSize() + (bodyBits + 7) / 8;
-  }
-
-  long pageSizeHint(int pageIdx) {
-    return pageSizeHintInner(pageIdx, PAGE_SIZE_OVERESTIMATION);
-  }
-
-  int[] nPerPage() {
-    int[] res = new int[pageInfos.size()];
-    for (int i = 0; i < res.length; i++) {
-      res[i] = pageInfos.get(i).pageN;
-    }
-    return res;
   }
 
   void writeMeta(BitWriter w) {

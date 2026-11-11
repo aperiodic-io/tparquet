@@ -305,10 +305,8 @@ final class Delta {
     }
 
     Matrix intoCholesky() {
+      // the upper triangle, which the reference zeroes, is never read
       for (int j = 0; j < h; j++) {
-        for (int i = 0; i < j; i++) {
-          set(i, j, 0.0);
-        }
         double s = 0.0;
         for (int k = 0; k < j; k++) {
           double value = get(j, k);
@@ -391,24 +389,22 @@ final class Delta {
     double[] initialDots = buildInitialAutocovDots(v, order);
     Matrix xtx = new Matrix(order + 1, order + 1);
     Matrix xty = new Matrix(order + 1, 1);
+    // xtx is symmetric, and only its lower triangle is ever read (here, by intoCholesky and by
+    // the substitutions), so only that is written; the reference writes both
     for (int i = 0; i < order; i++) {
       xtx.set(i, 0, initialDots[i]);
-      xtx.set(0, i, initialDots[i]);
     }
     xtx.set(order, 0, initialSum);
-    xtx.set(0, order, initialSum);
     xty.set(0, 0, initialDots[order]);
     for (int i = 1; i < order; i++) {
       for (int j = 1; j <= i; j++) {
         double lastDot = xtx.get(i - 1, j - 1);
         double dot = lastDot + (v[n - order + i - 1] * v[n - order + j - 1] - v[i - 1] * v[j - 1]);
         xtx.set(i, j, dot);
-        xtx.set(j, i, dot);
       }
       double lastSum = xtx.get(order, i - 1);
       double sum = lastSum + (v[n - order + i - 1] - v[i - 1]);
       xtx.set(order, i, sum);
-      xtx.set(i, order, sum);
     }
     for (int i = 1; i < order; i++) {
       double lastDot = xtx.get(order - 1, i - 1);

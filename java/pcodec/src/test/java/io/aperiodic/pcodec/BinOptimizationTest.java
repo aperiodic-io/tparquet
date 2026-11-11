@@ -48,4 +48,22 @@ class BinOptimizationTest {
       prev = a;
     }
   }
+
+  @Test
+  void trainedBinsAscendByLowerBound() {
+    // ChunkCompressor relies on this instead of sorting them as the reference does
+    java.util.SplittableRandom r = new java.util.SplittableRandom(11);
+    for (int round = 0; round < 300; round++) {
+      int n = 1 + r.nextInt(5000);
+      long[] latents = new long[n];
+      int shape = r.nextInt(4);
+      for (int i = 0; i < n; i++) {
+        latents[i] = shape == 0 ? r.nextLong() : shape == 1 ? r.nextInt(17) : shape == 2 ? (long) r.nextInt(2_000_000) + (1L << 40) : (i % 3) * 1000L;
+      }
+      BinOptimization.Trained t = BinOptimization.trainInfos(Latent.U64, latents, 1 + r.nextInt(8));
+      for (int i = 1; i < t.infos.size(); i++) {
+        assertTrue(Long.compareUnsigned(t.infos.get(i - 1).lower, t.infos.get(i).lower) < 0, "bins out of order");
+      }
+    }
+  }
 }
