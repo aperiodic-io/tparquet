@@ -482,22 +482,30 @@ fn fold(h: u64, out: &(u8, Vec<u8>)) -> u64 {
     (h ^ x).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
 }
 
+/// compress and decompress `iterations` times to warm up, then `iterations` times measured:
+/// the median times (ns) of each, and the compressed size
 fn bench<T: Raw>(cfg: &ChunkConfig, iterations: u32, b: &[u8]) -> Res {
     use std::time::Instant;
     let v = values::<T>(b);
-    let (mut best_c, mut best_d) = (u64::MAX, u64::MAX);
     let mut file = Vec::new();
-    for _ in 0..iterations {
+    let (mut cs, mut ds) = (Vec::new(), Vec::new());
+    for i in 0..2 * iterations {
         let t = Instant::now();
         file = simple_compress(&v, cfg).map_err(|e| e.to_string())?;
-        best_c = best_c.min(t.elapsed().as_nanos() as u64);
+        let c = t.elapsed().as_nanos() as u64;
         let t = Instant::now();
         let back: Vec<T> = simple_decompress(&file).map_err(|e| e.to_string())?;
-        best_d = best_d.min(t.elapsed().as_nanos() as u64);
+        let d = t.elapsed().as_nanos() as u64;
         std::hint::black_box(back);
+        if i >= iterations {
+            cs.push(c);
+            ds.push(d);
+        }
     }
-    let mut out = best_c.to_le_bytes().to_vec();
-    out.extend_from_slice(&best_d.to_le_bytes());
+    cs.sort_unstable();
+    ds.sort_unstable();
+    let mut out = cs[cs.len() / 2].to_le_bytes().to_vec();
+    out.extend_from_slice(&ds[ds.len() / 2].to_le_bytes());
     out.extend_from_slice(&(file.len() as u64).to_le_bytes());
     Ok(out)
 }

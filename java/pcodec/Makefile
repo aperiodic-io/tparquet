@@ -5,7 +5,7 @@ MVN ?= mvn -B
 SCALE ?= 1
 ORACLE := oracle/target/release/pcodec-oracle
 
-.PHONY: oracle test parity vectors vectors-check proofs mutants mutants-oracle check
+.PHONY: oracle test parity vectors vectors-check proofs mutants mutants-oracle bench check
 
 oracle:
 	cargo build --release --manifest-path oracle/Cargo.toml
@@ -32,6 +32,14 @@ vectors: oracle
 vectors-check: vectors
 	git diff --exit-code -- vectors
 	test -z "$$(git status --porcelain -- vectors)"
+
+# Java against the Rust reference on the same numbers (BENCHMARK.md); BENCH_ARGS passes
+# -Dbench.n=..., -Dbench.runs=..., -Dbench.only=...
+bench: oracle
+	$(MVN) -q test-compile
+	$(MVN) -q dependency:build-classpath -Dmdep.outputFile=target/test.classpath -Dmdep.includeScope=test
+	java -Xms2g -Xmx2g -cp "target/test-classes:target/classes:$$(cat target/test.classpath)" \
+	  -Dpcodec.oracle=$(ORACLE) $(BENCH_ARGS) io.aperiodic.pcodec.Bench
 
 # the SMT proofs (VERIFICATION.md)
 proofs:
