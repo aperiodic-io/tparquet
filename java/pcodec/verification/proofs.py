@@ -162,16 +162,16 @@ def saturating_casts():
 
 
 def rounding():
-    # RustMath.roundF64/roundF32: t = floor(|x|); if |x| - t >= 0.5: t += 1; copysign(t, x), for
-    # |x| < 2^52 (2^23), else x. Rust's round is round-half-away-from-zero: fp.roundToIntegral(RNA).
-    for (sort, big, name) in ((Float64(), 2.0 ** 52, "roundF64"), (Float32(), 2.0 ** 23, "roundF32")):
+    # RustMath.roundF64/roundF32 (and payload.Decimal.round): t = floor(|x|); if |x| - t >= 0.5:
+    # t += 1; copysign(t, x). Rust's round is round-half-away-from-zero: fp.roundToIntegral(RNA).
+    for (sort, name) in ((Float64(), "roundF64"), (Float32(), "roundF32")):
         x = FP("x", sort)
         a = fpAbs(x)
         t = fpRoundToIntegral(RTN(), a)
         half = FP_VAL(0.5, sort)
         t2 = If(fpGEQ(fpSub(RNE(), a, t), half), fpAdd(RNE(), t, FP_VAL(1.0, sort)), t)
         signed = If(fpIsNegative(x), fpNeg(t2), t2)
-        java = If(fpGEQ(a, FP_VAL(big, sort)), x, signed)
+        java = signed
         rust = fpRoundToIntegral(RNA(), x)
         prove(f"RustMath.{name} == Rust round (half away from zero), bit for bit",
               Implies(And(Not(fpIsNaN(x)), Not(fpIsInf(x))), fpToIEEEBV(java) == fpToIEEEBV(rust)), timeout_s=1200)

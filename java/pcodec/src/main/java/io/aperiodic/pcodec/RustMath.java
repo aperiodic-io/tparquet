@@ -61,10 +61,8 @@ final class RustMath {
     if (Double.isNaN(x) || Double.isInfinite(x)) {
       return x;
     }
+    // from 2^52 on, a is an integer: floor(a) == a, and the result is x
     double a = Math.abs(x);
-    if (a >= 0x1p52) {
-      return x;
-    }
     double t = Math.floor(a);
     if (a - t >= 0.5) {
       t += 1.0;
@@ -76,10 +74,8 @@ final class RustMath {
     if (Float.isNaN(x) || Float.isInfinite(x)) {
       return x;
     }
+    // from 2^23 on, a is an integer: floor(a) == a, and the result is x
     float a = Math.abs(x);
-    if (a >= 0x1p23f) {
-      return x;
-    }
     float t = (float) Math.floor(a);
     if (a - t >= 0.5f) {
       t += 1.0f;

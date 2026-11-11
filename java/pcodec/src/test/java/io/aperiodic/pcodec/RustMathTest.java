@@ -55,6 +55,14 @@ class RustMathTest {
     assertTrue(RustMath.totalCmp(1.0, Double.NaN) < 0);
     assertTrue(RustMath.totalCmp(Double.longBitsToDouble(0xfff8000000000000L), Double.NEGATIVE_INFINITY) < 0);
     assertEquals(0, RustMath.totalCmp(2.0, 2.0));
+    // negative second operands: their order among themselves and against positives
+    assertTrue(RustMath.totalCmp(1.0, -1.0) > 0);
+    assertTrue(RustMath.totalCmp(0.0, -0.0) > 0);
+    assertTrue(RustMath.totalCmp(-2.0, -1.0) < 0);
+    assertTrue(RustMath.totalCmp(-1.0, -2.0) > 0);
+    assertTrue(RustMath.totalCmp(-1.0, Math.nextDown(-1.0)) > 0);
+    assertTrue(RustMath.totalCmp(Math.nextDown(-1.0), -1.0) < 0);
+    assertEquals(0, RustMath.totalCmp(-3.0, -3.0));
     assertEquals(-0.0f, RustMath.sumF32(new float[0]));
   }
 
