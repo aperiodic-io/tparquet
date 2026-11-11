@@ -13,16 +13,22 @@ ROW = re.compile(r"^\|\s*(.+?)\s*\|\s*([\d.]+)\s*\|[^|]*\|[^|]*\|\s*([\d.]+)\s*\
 
 
 def table(path: pathlib.Path) -> dict[str, tuple[float, float]]:
-    rows: dict[str, tuple[float, float]] = {}
+    """each case's median throughputs over the repeated runs in the file"""
+    rows: dict[str, list[tuple[float, float]]] = {}
     for line in path.read_text().splitlines():
         m = ROW.match(line)
         if m:
-            rows[m.group(1)] = (float(m.group(2)), float(m.group(3)))
-    return rows
+            rows.setdefault(m.group(1), []).append((float(m.group(2)), float(m.group(3))))
+
+    def median(xs: list[float]) -> float:
+        s = sorted(xs)
+        return s[len(s) // 2] if len(s) % 2 else (s[len(s) // 2 - 1] + s[len(s) // 2]) / 2
+
+    return {k: (median([e for e, _ in v]), median([d for _, d in v])) for k, v in rows.items()}
 
 
 def main() -> None:
-    here = pathlib.Path(__file__).parent / "results"
+    here = pathlib.Path(__file__).parent / (sys.argv[1] if len(sys.argv) > 1 else "results")
     print("| POC | encode | decode | best encode case | best decode case |")
     print("|---|---:|---:|---|---|")
     for p in sorted(here.glob("*.txt")):

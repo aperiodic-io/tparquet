@@ -1,0 +1,14 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java
+index f90118e..0fdf1ec 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java
+@@ -52,6 +52,9 @@ public final class Pco {
+   /** the reference's numbers are typed, so it cannot be given bits a type does not have */
+   static void checkRaw(NumberType type, long[] nums) {
+     long outside = ~type.latent.mask;
++    if (outside == 0) {
++      return; // 64-bit types: every value fits
++    }
+     for (int i = 0; i < nums.length; i++) {
+       if ((nums[i] & outside) != 0) {
+         throw PcoException.invalidArgument(

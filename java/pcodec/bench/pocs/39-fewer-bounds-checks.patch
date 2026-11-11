@@ -1,0 +1,22 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
+index ace201f..cd71066 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
+@@ -200,9 +200,14 @@ final class ChunkDecompressor {
+     }
+     long[] deltaLatents = d == null ? null : d.latents;
+     vars[1].readBatch(r, deltaLatents, nRemaining);
+-    r.checkInBounds();
+-    if (vars[2] != null) {
+-      vars[2].readBatch(r, deltaLatents, nRemaining);
++    LatentDecompressor secondary = vars[2];
++    // reads only move forward, so when the secondary's read cannot fail (only a lookback delta
++    // can), the check after it fails exactly when this one would, with nothing in between
++    if (secondary == null || secondary.delta.kind == DeltaEncoding.Kind.LOOKBACK) {
++      r.checkInBounds();
++    }
++    if (secondary != null) {
++      secondary.readBatch(r, deltaLatents, nRemaining);
+       r.checkInBounds();
+     }
+     join(dst, at, batchN);

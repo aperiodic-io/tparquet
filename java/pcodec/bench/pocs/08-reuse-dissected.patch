@@ -1,0 +1,66 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..2a1d18e 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -69,22 +69,46 @@ final class ChunkCompressor {
+       final long[] offsets;
+       final int[] offsetBits;
+       final int[] ansFinalStates = new int[ChunkMeta.ANS_INTERLEAVING];
++      /** the page's count; the arrays may be longer, left from a longer page */
++      int n;
+ 
+       Dissected(int n, int defaultState) {
+         ansVals = new int[n];
+         ansBits = new int[n];
+         offsets = new long[n];
+         offsetBits = new int[n];
++        reset(n, defaultState);
++      }
++
++      /**
++       * Ready for a page of {@code n}; every element below it is written by {@code dissectPage}
++       * before it is read, so the arrays need no clearing.
++       */
++      void reset(int n, int defaultState) {
++        this.n = n;
+         java.util.Arrays.fill(ansFinalStates, defaultState);
+       }
+     }
+ 
++    /** the last page's arrays, reused by the next page (pages are dissected and written in turn) */
++    private Dissected reusable;
++
++    private Dissected dissectedFor(int pageN) {
++      Dissected d = reusable;
++      if (d == null || d.offsets.length < pageN) {
++        d = reusable = new Dissected(pageN, encoder.defaultState());
++      } else {
++        d.reset(pageN, encoder.defaultState());
++      }
++      return d;
++    }
++
+     Dissected dissectPage(int start, int end) {
+       if (isTrivial) {
+-        return new Dissected(0, encoder.defaultState());
++        return dissectedFor(0);
+       }
+       int pageN = end - start;
+-      Dissected d = new Dissected(pageN, encoder.defaultState());
++      Dissected d = dissectedFor(pageN);
+       int nBatches = (pageN + FULL_BATCH_N - 1) / FULL_BATCH_N;
+       int[] searchIdxs = new int[FULL_BATCH_N];
+       for (int b = nBatches - 1; b >= 0; b--) {
+@@ -159,10 +183,10 @@ final class ChunkCompressor {
+     }
+ 
+     void writeDissectedBatch(Dissected d, int batchStart, BitWriter w) {
+-      if (batchStart >= d.offsets.length) {
++      if (batchStart >= d.n) {
+         return;
+       }
+-      int end = Math.min(batchStart + FULL_BATCH_N, d.offsets.length);
++      int end = Math.min(batchStart + FULL_BATCH_N, d.n);
+       if (needsAns) {
+         for (int i = batchStart; i < end; i++) {
+           w.writeUint(d.ansVals[i] & 0xffffffffL, d.ansBits[i]);

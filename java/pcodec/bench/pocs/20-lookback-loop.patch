@@ -1,0 +1,83 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+index fd8bdd5..9057f29 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+@@ -98,31 +98,37 @@ final class Delta {
+     java.util.Arrays.fill(lookbackGoodnesses, 1);
+     long[] lookbacks = new long[len - stateN];
+     long[] idxHashTable = new long[COARSENESSES.length * hashTableN];
+-    long[] proposed = new long[PROPOSED_LOOKBACKS];
++    // lookbacks are at most windowN (2^15): ints, so the loop below indexes with them directly
++    int[] proposed = new int[PROPOSED_LOOKBACKS];
+     for (int i = 0; i < PROPOSED_LOOKBACKS; i++) {
+       proposed[i] = Math.min(i + 1, stateN);
+     }
+-    long bestLookback = 1;
++    int bestLookback = 1;
+     long repeatingIdx = 0;
+     int hashMask = hashTableN - 1;
++    // lt.sub and lt.leadingZeros, with the latent's mask and width read once
++    long mask = lt.mask;
++    int lzShift = 64 - lt.bits;
+     for (int i = stateN; i < len; i++) {
+-      long l = v[from + i];
++      int at = from + i;
++      long l = v[at];
+       int newBrute = Math.min(i, PROPOSED_LOOKBACKS);
+       proposed[newBrute - 1] = newBrute;
+ 
+-      // hash_lookup
++      // hash_lookup: the buckets below, at and above l's, without an array per latent
+       int proposalIdx = BRUTE_LOOKBACKS + REPEATING_LOOKBACKS;
+       int offset = 0;
+       for (int coarseness : COARSENESSES) {
+         long bucket = l >>> coarseness;
+-        int h0 = hashFn(bucket - 1, hashMask);
+-        int h1 = hashFn(bucket, hashMask);
+-        int h2 = hashFn(bucket + 1, hashMask);
+-        int[] hs = {h0, h1, h2};
+-        for (int h : hs) {
++        int h1 = 0;
++        for (long d = -1; d <= 1; d++) {
++          int h = hashFn(bucket + d, hashMask);
++          if (d == 0) {
++            h1 = h;
++          }
+           long lookbackToLast = i - idxHashTable[offset + h];
+           proposed[proposalIdx] =
+-              lookbackToLast <= windowN ? lookbackToLast : Math.min(proposalIdx, i);
++              (int) (lookbackToLast <= windowN ? lookbackToLast : Math.min(proposalIdx, i));
+           proposalIdx++;
+         }
+         idxHashTable[offset + h1] = i;
+@@ -131,12 +137,12 @@ final class Delta {
+ 
+       // find_best_lookback
+       int bestGoodness = 0;
+-      long newBest = 0;
+-      for (long lookback : proposed) {
+-        int lookbackGoodness = lookbackGoodnesses[(int) lookback - 1];
+-        long other = v[from + i - (int) lookback];
+-        long delta = Latent.min(lt.sub(l, other), lt.sub(other, l));
+-        int goodness = lookbackGoodness + lt.leadingZeros(delta);
++      int newBest = 0;
++      for (int lookback : proposed) {
++        int lookbackGoodness = lookbackGoodnesses[lookback - 1];
++        long other = v[at - lookback];
++        long delta = Latent.min((l - other) & mask, (other - l) & mask);
++        int goodness = lookbackGoodness + Long.numberOfLeadingZeros(delta) - lzShift;
+         if (goodness > bestGoodness) {
+           bestGoodness = goodness;
+           newBest = lookback;
+@@ -148,9 +154,9 @@ final class Delta {
+       proposed[BRUTE_LOOKBACKS + (int) (repeatingIdx % REPEATING_LOOKBACKS)] = newBest;
+       bestLookback = newBest;
+       lookbacks[i - stateN] = bestLookback;
+-      int c = ++lookbackCounts[(int) bestLookback - 1];
++      int c = ++lookbackCounts[bestLookback - 1];
+       if ((c & (c - 1)) == 0) {
+-        lookbackGoodnesses[(int) bestLookback - 1]++;
++        lookbackGoodnesses[bestLookback - 1]++;
+       }
+     }
+     return lookbacks;

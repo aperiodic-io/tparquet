@@ -1,0 +1,258 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java
+index 383ae37..9763893 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java
+@@ -6,6 +6,10 @@ import java.util.List;
+ /**
+  * {@code pco::histograms}: up to {@code 2^nBinsLog} bins of tight, exclusive ranges with exact
+  * counts, by a partial quicksort.
++ *
++ * <p>While it runs, the latents are kept flipped (XOR-ed with {@link SortUtils#SIGN}) so the sort
++ * compares them signed; bounds and bins stay in the latents' own domain, and every value read from
++ * the array into one is flipped back.
+  */
+ final class Histogram {
+   static final class Bin {
+@@ -57,7 +61,10 @@ final class Histogram {
+   /** with a given bad pivot limit (the reference's is 1 + log2(n + 1); tests force smaller) */
+   static List<Bin> histogram(long[] latents, Latent lt, int nBinsLog, int badPivotLimit) {
+     Histogram h = new Histogram(lt, latents.length, nBinsLog);
++    // flipped back on exit, so the caller sees the same permutation of the same values
++    SortUtils.flip(latents, 0, latents.length);
+     h.recurse(latents, 0, latents.length, new Bound(false, 0), new Bound(false, lt.max()), badPivotLimit);
++    SortUtils.flip(latents, 0, latents.length);
+     return h.dst;
+   }
+ 
+@@ -68,7 +75,9 @@ final class Histogram {
+   static List<Bin> runSorted(long[][] runs, long n, int nBinsLog) {
+     Histogram h = new Histogram(Latent.U32, n, nBinsLog);
+     for (long[] run : runs) {
+-      h.applySorted(run, 0, run.length);
++      long[] flipped = run.clone();
++      SortUtils.flip(flipped, 0, flipped.length);
++      h.applySorted(flipped, 0, flipped.length);
+     }
+     List<Bin> res = new ArrayList<>(h.dst);
+     res.add(h.hasIncomplete ? new Bin(h.incCount, h.incLower, h.incUpper) : new Bin(0, 0, 0));
+@@ -87,20 +96,25 @@ final class Histogram {
+     return new Histogram(Latent.U32, n, nBinsLog);
+   }
+ 
++  /** a flipped value back in the latents' domain */
++  private static long unflip(long x) {
++    return x ^ SortUtils.SIGN;
++  }
++
+   private static long sliceMin(long[] v, int from, int to) {
+-    long m = -1L;
++    long m = Long.MAX_VALUE;
+     for (int i = from; i < to; i++) {
+-      m = Latent.min(m, v[i]);
++      m = Math.min(m, v[i]);
+     }
+-    return m;
++    return unflip(m);
+   }
+ 
+   private static long sliceMax(long[] v, int from, int to) {
+-    long m = 0;
++    long m = Long.MIN_VALUE;
+     for (int i = from; i < to; i++) {
+-      m = Latent.max(m, v[i]);
++      m = Math.max(m, v[i]);
+     }
+-    return m;
++    return unflip(m);
+   }
+ 
+   private void applyIncomplete(long[] v, int from, int to, Bound lower, Bound upper) {
+@@ -151,7 +165,7 @@ final class Histogram {
+         binIdx = spare;
+       }
+     }
+-    Bound c = new Bound(true, v[from]);
++    Bound c = new Bound(true, unflip(v[from]));
+     applyIncomplete(v, from, to, c, c);
+     if (end >= cCount(binIdx)) {
+       completeBin(binIdx);
+@@ -165,7 +179,7 @@ final class Histogram {
+       long targetI = targetCCount - nApplied;
+       int len = to - from;
+       if (targetI >= len) {
+-        applyIncomplete(v, from, to, new Bound(true, v[from]), new Bound(true, v[to - 1]));
++        applyIncomplete(v, from, to, new Bound(true, unflip(v[from])), new Bound(true, unflip(v[to - 1])));
+         if (targetI == len) {
+           completeBin(targetBinIdx);
+         }
+@@ -181,7 +195,8 @@ final class Histogram {
+         r++;
+       }
+       if (l > 0) {
+-        applyIncomplete(v, from, from + l, new Bound(true, v[from]), new Bound(true, v[from + l - 1]));
++        applyIncomplete(
++            v, from, from + l, new Bound(true, unflip(v[from])), new Bound(true, unflip(v[from + l - 1])));
+       }
+       applyConstantRun(v, from + l, from + r);
+       from = from + r;
+@@ -207,7 +222,7 @@ final class Histogram {
+       applyConstantRun(v, from, to);
+       return;
+     }
+-    long tentative = SortUtils.choosePivot(v, from, to);
++    long tentative = unflip(SortUtils.choosePivot(v, from, to, SortUtils.SIGN));
+     long pivot;
+     Bound lhsUb;
+     Bound rhsLb;
+@@ -220,15 +235,15 @@ final class Histogram {
+       lhsUb = new Bound(true, tentative);
+       rhsLb = new Bound(false, pivot);
+     }
+-    long pr = SortUtils.partition(v, from, to, pivot);
++    long pr = SortUtils.partitionFlipped(v, from, to, pivot ^ SortUtils.SIGN);
+     int lhsCount = (int) pr;
+     boolean wasBad = (pr >>> 32) != 0;
+     int mid = from + lhsCount;
+     if (wasBad) {
+       badPivotLimit -= 1;
+       if (badPivotLimit == 0) {
+-        SortUtils.heapsort(v, from, mid);
+-        SortUtils.heapsort(v, mid, to);
++        SortUtils.heapsort(v, from, mid, SortUtils.SIGN);
++        SortUtils.heapsort(v, mid, to, SortUtils.SIGN);
+         applySorted(v, from, to);
+         return;
+       }
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
+index 6ef9382..315e6ec 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
+@@ -1,38 +1,59 @@
+ package io.aperiodic.pcodec;
+ 
+-/** {@code pco::sort_utils}, on a range {@code [from, to)} of unsigned latents. */
++/**
++ * {@code pco::sort_utils}, on a range {@code [from, to)} of unsigned latents.
++ *
++ * <p>The histogram sorts latents XOR-ed with {@link #SIGN} ("flipped"), whose signed order is the
++ * unsigned order of the latents: a signed compare is one instruction where an unsigned one costs
++ * an extra add on each side. The methods taking a {@code flip} compare {@code v[i] ^ flip}
++ * unsigned, so {@code flip = SIGN} orders a flipped range and {@code flip = 0} a plain one.
++ */
+ final class SortUtils {
++  static final long SIGN = Long.MIN_VALUE;
++
+   private SortUtils() {}
+ 
+   /** {@code choose_pivot} */
+   static long choosePivot(long[] v, int from, int to) {
++    return choosePivot(v, from, to, 0);
++  }
++
++  /** {@code choose_pivot} on a range XOR-ed with {@code flip}; the pivot is returned as stored */
++  static long choosePivot(long[] v, int from, int to, long flip) {
+     int len = to - from;
+     int[] abc = {len / 4, len / 2, (len * 3) / 4};
+     if (len >= 8) {
+       if (len >= 50) {
+         for (int k = 0; k < 3; k++) {
+           int[] t = {abc[k] - 1, abc[k], abc[k] + 1};
+-          sort3(v, from, t, 0, 1, 2);
++          sort3(v, from, t, 0, 1, 2, flip);
+           abc[k] = t[1];
+         }
+       }
+-      sort3(v, from, abc, 0, 1, 2);
++      sort3(v, from, abc, 0, 1, 2, flip);
+     }
+     return v[from + abc[1]];
+   }
+ 
+-  private static void sort2(long[] v, int from, int[] idx, int a, int b) {
+-    if (Latent.lt(v[from + idx[b]], v[from + idx[a]])) {
++  private static void sort2(long[] v, int from, int[] idx, int a, int b, long flip) {
++    if (Latent.lt(v[from + idx[b]] ^ flip, v[from + idx[a]] ^ flip)) {
+       int t = idx[a];
+       idx[a] = idx[b];
+       idx[b] = t;
+     }
+   }
+ 
+-  private static void sort3(long[] v, int from, int[] idx, int a, int b, int c) {
+-    sort2(v, from, idx, a, b);
+-    sort2(v, from, idx, b, c);
+-    sort2(v, from, idx, a, b);
++  private static void sort3(long[] v, int from, int[] idx, int a, int b, int c, long flip) {
++    sort2(v, from, idx, a, b, flip);
++    sort2(v, from, idx, b, c, flip);
++    sort2(v, from, idx, a, b, flip);
++  }
++
++  /** XORs {@code v[from, to)} with {@link #SIGN}, in and out of the flipped domain. */
++  static void flip(long[] v, int from, int to) {
++    for (int i = from; i < to; i++) {
++      v[i] ^= SIGN;
++    }
+   }
+ 
+   /** {@code break_patterns} (64-bit usize) */
+@@ -66,11 +87,19 @@ final class SortUtils {
+    * pivot was bad.
+    */
+   static long partition(long[] v, int from, int to, long pivot) {
++    flip(v, from, to);
++    long res = partitionFlipped(v, from, to, pivot ^ SIGN);
++    flip(v, from, to);
++    return res;
++  }
++
++  /** {@link #partition} of a flipped range around a flipped pivot, by signed compares. */
++  static long partitionFlipped(long[] v, int from, int to, long pivot) {
+     int leftIdx = 0;
+     int len = to - from;
+     for (int pos = 0; pos < len; pos++) {
+       long value = v[from + pos];
+-      boolean isLt = Latent.lt(value, pivot);
++      boolean isLt = value < pivot;
+       v[from + pos] = v[from + leftIdx];
+       v[from + leftIdx] = value;
+       leftIdx += isLt ? 1 : 0;
+@@ -81,28 +110,33 @@ final class SortUtils {
+ 
+   /** {@code heapsort} */
+   static void heapsort(long[] v, int from, int to) {
++    heapsort(v, from, to, 0);
++  }
++
++  /** {@code heapsort} of a range XOR-ed with {@code flip} */
++  static void heapsort(long[] v, int from, int to, long flip) {
+     int len = to - from;
+     for (int i = len / 2 - 1; i >= 0; i--) {
+-      siftDown(v, from, len, i);
++      siftDown(v, from, len, i, flip);
+     }
+     for (int i = len - 1; i >= 1; i--) {
+       long t = v[from];
+       v[from] = v[from + i];
+       v[from + i] = t;
+-      siftDown(v, from, i, 0);
++      siftDown(v, from, i, 0, flip);
+     }
+   }
+ 
+-  private static void siftDown(long[] v, int from, int len, int node) {
++  private static void siftDown(long[] v, int from, int len, int node, long flip) {
+     while (true) {
+       int child = 2 * node + 1;
+       if (child >= len) {
+         break;
+       }
+       if (child + 1 < len) {
+-        child += Latent.lt(v[from + child], v[from + child + 1]) ? 1 : 0;
++        child += Latent.lt(v[from + child] ^ flip, v[from + child + 1] ^ flip) ? 1 : 0;
+       }
+-      if (!Latent.lt(v[from + node], v[from + child])) {
++      if (!Latent.lt(v[from + node] ^ flip, v[from + child] ^ flip)) {
+         break;
+       }
+       long t = v[from + node];
