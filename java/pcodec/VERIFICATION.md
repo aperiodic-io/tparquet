@@ -153,14 +153,16 @@ is covered. At scale 1 (each CI run; the weekly run is at scale 8):
 | modes and delta specs combined, random levels | 3,445 | 2,255 |
 | paging specs (equal pages, exact pages, wrong sums) | 5,533 | 979 |
 | files of more than one chunk (up to 600,000 numbers) | 64 | 0 |
-| decoder on corrupted files (bit flips, truncation, random bytes, appended bytes, wrong type), every mode and delta spec | 10,416 | 5,606 |
-| payload encoder, every hint and level, DECIMAL on and off, and decoding back | 1,640 | 62 |
-| payload decoder on corrupted payloads | 5,632 | 3,986 |
+| decoder on corrupted files (bit flips, truncation, random bytes, appended bytes, wrong type), every mode and delta spec | 10,416 | 5,582 |
+| payload encoder, every hint and level, DECIMAL on and off, and decoding back | 1,639 | 62 |
+| payload decoder on corrupted payloads | 5,632 | 3,973 |
 
 Every case agrees: the same status (ok, error, panic); when ok the same bytes; when the
 reference returns a pco error, the same error kind (`PcoException.kind()` against the `pco
 {kind:?} error` of the reference's message; the exhaustive suites fold the kind into their
-digests).
+digests); when it refuses a payload, the same message (`tparquet_core`'s `Error` and
+`PayloadException` print the same text), or for a pco error inside a payload its kind, and for
+a Zstandard error only that it is one.
 At scale 8, the weekly run's, the same suites make 1,320,799 cases (12,624 of them panics of the
 reference), and every one agrees.
 

@@ -25,7 +25,8 @@ class PayloadParityTest {
     try {
       return new Parity.Outcome(0, r.run(), null);
     } catch (PayloadException e) {
-      return new Parity.Outcome(1, null, e.getMessage());
+      String kind = e.getCause() instanceof PcoException ? Parity.rustKind(((PcoException) e.getCause()).kind()) : null;
+      return new Parity.Outcome(1, null, e.getMessage(), kind);
     }
   }
 

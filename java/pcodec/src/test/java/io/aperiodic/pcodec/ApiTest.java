@@ -91,6 +91,13 @@ class ApiTest {
     byte[] f = Pco.compress(NumberType.I64, new long[1000], new ChunkConfig());
     Pco.CountExceeded e = assertThrows(Pco.CountExceeded.class, () -> Pco.decompress(f, 0, f.length, NumberType.I64, 999, (b, n) -> { }));
     assertEquals(1000, e.count);
+    // over several chunks: the bound counts every chunk, and a bound of exactly the count holds
+    byte[] g = Pco.compress(NumberType.I64, new long[1000], new ChunkConfig().withPagingSpec(PagingSpec.equalPagesUpTo(100)));
+    long[] seen = new long[1];
+    assertEquals(g.length, Pco.decompress(g, 0, g.length, NumberType.I64, 1000, (b, n) -> seen[0] += n));
+    assertEquals(1000, seen[0]);
+    Pco.CountExceeded e2 = assertThrows(Pco.CountExceeded.class, () -> Pco.decompress(g, 0, g.length, NumberType.I64, 999, (b, n) -> { }));
+    assertEquals(1000, e2.count);
   }
 
   @Test

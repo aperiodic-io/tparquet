@@ -61,6 +61,8 @@ final class Parity {
 
   private static final java.util.regex.Pattern PCO_ERROR = java.util.regex.Pattern.compile("^pco (\\w+) error: ");
 
+  static final String PAYLOAD = "pcodec payload: ";
+
   /** the kind in a reference error's message (`pco {kind:?} error: ...`), or null if none */
   static String referenceKind(Oracle.Answer a) {
     java.util.regex.Matcher m = PCO_ERROR.matcher(a.message());
@@ -76,9 +78,28 @@ final class Parity {
       return "reference " + want + ", java " + got;
     }
     if (want.status == 1) {
-      String k = referenceKind(want);
-      if (k != null && !k.equals(got.kind)) {
-        return "reference " + want + ", java " + got;
+      String m = want.message();
+      if (m.startsWith(PAYLOAD + "pcodec: ")) {
+        // a pco error inside a payload: its kind (the messages' bit positions may differ)
+        java.util.regex.Matcher k = PCO_ERROR.matcher(m.substring(PAYLOAD.length() + "pcodec: ".length()));
+        if (k.find() && !k.group(1).equals(got.kind)) {
+          return "reference " + want + ", java " + got;
+        }
+      } else if (m.startsWith(PAYLOAD + "zstd: ")) {
+        // libzstd's and the Java Zstandard's messages differ
+        if (got.detail == null || !got.detail.startsWith(PAYLOAD + "zstd: ")) {
+          return "reference " + want + ", java " + got;
+        }
+      } else if (m.startsWith(PAYLOAD)) {
+        // the payload's own errors: the same message
+        if (!m.equals(got.detail)) {
+          return "reference " + want + ", java " + got;
+        }
+      } else {
+        String k = referenceKind(want);
+        if (k != null && !k.equals(got.kind)) {
+          return "reference " + want + ", java " + got;
+        }
       }
     }
     if (want.status == 0 && !Arrays.equals(want.body, got.body)) {

@@ -52,7 +52,7 @@ public final class Pco {
     w.writeAlignedBytes(new byte[] {(byte) uniformTypeByte});
     int power = nHint == 0 ? 1 : 64 - Long.numberOfLeadingZeros(nHint);
     w.writeUint(power - 1, BITS_TO_ENCODE_VARINT_POWER);
-    w.writeUint(power == 64 ? nHint : nHint & ((1L << power) - 1), power);
+    w.writeUint(nHint, power); // nHint has exactly `power` bits
     w.finishByte();
     w.writeAlignedBytes(new byte[] {(byte) FORMAT_MAJOR, (byte) FORMAT_MINOR});
   }

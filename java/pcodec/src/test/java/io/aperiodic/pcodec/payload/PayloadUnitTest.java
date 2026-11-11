@@ -203,4 +203,18 @@ class PayloadUnitTest {
     assertEquals(4, ParquetType.FLOAT.width);
     assertNull(ParquetType.fromParquet(3));
   }
+
+  @Test
+  void decimalRoundIsRustsRound() {
+    double[][] cases = {
+      {0.5, 1}, {-0.5, -1}, {1.5, 2}, {2.5, 3}, {-2.5, -3}, {0.49999999999999994, 0},
+      {2.4999999999999996, 2}, {-0.0, -0.0}, {0.0, 0.0}, {-0.3, -0.0},
+      {0x1p52, 0x1p52}, {0x1p52 + 1, 0x1p52 + 1}, {-0x1p52 - 1, -0x1p52 - 1}, {0x1p52 - 0.5, 0x1p52},
+      {0x1p53, 0x1p53}, {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY},
+      {Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY}, {Double.NaN, Double.NaN},
+    };
+    for (double[] c : cases) {
+      assertEquals(Double.doubleToRawLongBits(c[1]), Double.doubleToRawLongBits(Decimal.round(c[0])), "round(" + c[0] + ")");
+    }
+  }
 }
