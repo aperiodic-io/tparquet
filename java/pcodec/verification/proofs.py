@@ -13,7 +13,7 @@ named in each theorem); the Rust side from pco 1.0.4. Run: python3 proofs.py [-k
 import sys
 import time
 from z3 import (
-    And, BitVec, BitVecVal, Extract, FP, FPVal, Float32, Float64, If, Implies, LShR, Not, Or,
+    And, BitVec, BitVecVal, Concat, Extract, FP, FPVal, Float32, Float64, If, Implies, LShR, Not, Or,
     RNA, RNE, RTN, RTZ, Solver, UDiv, ULE, ULT, URem, ZeroExt, fpAbs, fpAdd, fpEQ, fpGEQ, fpGT,
     fpIsInf, fpIsNaN, fpIsNegative, fpLEQ, fpLT, fpMul, fpNeg, fpRoundToIntegral, fpSignedToFP,
     fpSub, fpToIEEEBV, fpToSBV, fpToUBV, fpUnsignedToFP, sat, unsat,
@@ -302,29 +302,97 @@ def lookback():
                   Implies(pre, And(*[outs[i] == xs[i] for i in range(n)])))
 
 
+def conv1():
+    # Delta.conv1Encode / conv1Decode: the encoder keeps v[0, order) as the state and writes, for
+    # each later k, v[k] - predict(v[k - order, k)) + MID (wrapping); the decoder rebuilds v[k]
+    # from the state and those residuals, predicting from what it has rebuilt. The prediction
+    # (predictOne: weights, bias, quantization) is an uninterpreted function P of the window, so
+    # the theorem holds for every prediction, the real one included: what it checks is that both
+    # sides predict each value from the same window, and the wrapping arithmetic.
+    from z3 import Function, BitVecSort
+    for bits in (16, 32, 64):
+        m = BitVecVal(mask(bits), 64)
+        mid = BitVecVal(1 << (bits - 1), 64)
+        for order in range(1, 5):
+            p_fn = Function(f"P{bits}_{order}", *([BitVecSort(64)] * order), BitVecSort(64))
+
+            def predict(window):
+                return p_fn(*window) & m
+
+            for n in (order + 1, order + 3, order + 6):
+                vs = [BitVec(f"v{i}", 64) for i in range(n)]
+                pre = And(*[(v & ~m) == 0 for v in vs])
+                resid = [((vs[k] - predict(vs[k - order:k]) + mid) & m) for k in range(order, n)]
+                rebuilt = list(vs[:order])
+                for r in resid:
+                    k = len(rebuilt)
+                    rebuilt.append((((r - mid) & m) + predict(rebuilt[k - order:k])) & m)
+                prove(f"conv1 delta: decode(encode(x)) == x for every prediction, u{bits}, order {order}, n={n}",
+                      Implies(pre, And(*[rebuilt[i] == vs[i] for i in range(n)])))
+
+
 # ---------------------------------------------------------------- bit packing and varints
 
 def bit_io():
-    # BitWriter.writeUint ORs x << off into 8 bytes and x >>> (64 - off) into the 9th;
-    # BitReader.peekAt reads u64 >>> off, ORs u64(next) << (64 - off) when n > 64 - off.
+    # The bit stream: least significant bit first. BitWriter keeps the bits not yet stored in a
+    # 64-bit register `staged`, of which the low `sb` (0..63) are pending and the rest zero, and
+    # stores the register as one little-endian long when it fills.
     x = BitVec("x", 64)
-    off = BitVec("off", 64)
     n = BitVec("n", 64)
-    prior = BitVec("prior", 128)  # bits already written below off
-    pre = And(ULE(off, 7), ULE(n, 64), ULE(1, n),
-              If(n == 64, True, LShR(x, n) == 0),
-              LShR(prior, ZeroExt(64, off)) == 0)
-    wide = ZeroExt(64, x) << ZeroExt(64, off)
-    buf = prior | wide
-    lo = Extract(63, 0, LShR(buf, ZeroExt(64, off)))
-    hi_word = Extract(127, 64, buf)
-    shift_back = BitVecVal(64, 64) - off
-    v = If(And(UGT_(n, BitVecVal(64, 64) - off), off != 0), lo | (hi_word << shift_back), lo)
-    read = If(n == 64, v, v & ((BitVecVal(1, 64) << n) - 1))
-    prove("BitWriter.writeUint then BitReader.readUint returns the value (1..64 bits, any offset)",
-          Implies(pre, read == x))
-    prove("BitWriter.writeUint leaves the bits below the position unchanged",
-          Implies(pre, Extract(7, 0, buf) & ((BitVecVal(1, 8) << Extract(7, 0, off)) - 1) == Extract(7, 0, prior)))
+    sb = BitVec("sb", 64)
+    staged = BitVec("staged", 64)
+    fits_n = If(n == 64, True, LShR(x, n) == 0)
+    inv = And(ULT(sb, 64), LShR(staged, sb) == 0)
+    pre = And(inv, ULE(n, 64), fits_n)
+    # the pending bits followed by x, as a 128-bit stream
+    stream = ZeroExt(64, staged) | (ZeroExt(64, x) << ZeroExt(64, sb))
+    total = sb + n
+    # writeUint: staged |= x << sb; if sb + n >= 64, store staged, keep x >>> (64 - sb) (0 if sb == 0)
+    st1 = staged | (x << sb)
+    full = UGE_(total, 64)
+    stored = st1
+    rest = If(sb == 0, BitVecVal(0, 64), LShR(x, BitVecVal(64, 64) - sb))
+    new_staged = If(full, rest, st1)
+    new_sb = If(full, total - 64, total)
+    prove("BitWriter.writeUint without a store: the register holds the stream, nothing above it",
+          Implies(And(pre, Not(full)), And(ZeroExt(64, new_staged) == stream, LShR(new_staged, new_sb) == 0)))
+    prove("BitWriter.writeUint with a store: stored word then register hold the stream, nothing above it",
+          Implies(And(pre, full), And(Concat(new_staged, stored) == stream, LShR(new_staged, new_sb) == 0,
+                                      ULT(new_sb, 64))))
+    # writeBatch's ANS loop computes the rest as x >>> (n - newSb), 0 when newSb == 0 (n <= 32)
+    rest_ans = If(total - 64 == 0, BitVecVal(0, 64), LShR(x, n - (total - 64)))
+    prove("BitWriter.writeBatch ANS step: x >>> (n - newSb) is writeUint's rest (n <= 32)",
+          Implies(And(pre, ULE(n, 32), full), rest_ans == rest))
+    # finishByte: sb rounded up to a multiple of 8; the padding bits are the register's zeros
+    sb8 = (sb + 7) & ~BitVecVal(7, 64)
+    prove("BitWriter.finishByte pads with zero bits",
+          Implies(inv, And(ULE(sb8, 64), If(sb8 == 64, True, LShR(staged, sb8) == 0),
+                           LShR(staged, sb) == 0)))
+    # flushStagedBytes / toByteArray: byte i of the register is staged >>> 8i, little-endian like
+    # the stored longs (VarHandle LITTLE_ENDIAN)
+
+    # BitReader.peekAt over the words of the stream (word k holds bits 64k..64k+63):
+    # v = (w0 >>> off) | ((w1 << 1) << (63 - off)), masked to n bits, is bits [off, off+n)
+    w0 = BitVec("w0", 64)
+    w1 = BitVec("w1", 64)
+    off = BitVec("off", 64)
+    v = LShR(w0, off) | ((w1 << 1) << (BitVecVal(63, 64) - off))
+    read = v & LShR(BitVecVal(-1, 64), BitVecVal(64, 64) - n)
+    want = Extract(63, 0, LShR(Concat(w1, w0), ZeroExt(64, off)))
+    want_n = If(n == 64, want, want & ((BitVecVal(1, 64) << n) - 1))
+    prove("BitReader.peekAt reads bits [off, off + n) of the two words (0 <= off < 64, 1 <= n <= 64)",
+          Implies(And(ULT(off, 64), ULE(1, n), ULE(n, 64)), read == want_n))
+    # with both: what writeUint appended at stream position p, peekAt at p returns
+    p_off = BitVec("p", 64)
+    prove("BitWriter then BitReader: a value written at a position is read back (1..64 bits)",
+          Implies(And(ULT(p_off, 64), ULE(1, n), ULE(n, 64), fits_n),
+                  Extract(63, 0, LShR(LShR(Concat(BitVecVal(0, 64), BitVecVal(0, 64))
+                                           | (ZeroExt(64, x) << ZeroExt(64, p_off)), ZeroExt(64, p_off)), 0))
+                  == x))
+
+
+def UGE_(a, b):
+    return ULE(b, a)
 
 
 def UGT_(a, b):
@@ -384,7 +452,7 @@ def int_float():
               Implies(integral, back == bits), timeout_s=1200)
 
 
-THEOREMS = [ordered_latents, latent_ops, classic, int_mult, float_quant, consecutive, lookback,
+THEOREMS = [ordered_latents, latent_ops, classic, int_mult, float_quant, consecutive, lookback, conv1,
             bit_io, varints, rounding, saturating_casts, conversions, int_float]
 
 

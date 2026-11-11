@@ -139,6 +139,7 @@
             <!-- and the checks of Modes.Margins, the order-independence checker -->
             <param>io.aperiodic.pcodec.OrderIndependenceTest</param>
             <param>io.aperiodic.pcodec.BitIoTest</param>
+            <param>io.aperiodic.pcodec.InvariantsTest</param>
           </targetTests>
           <!-- hashCode: Mode's is only required to agree with equals, which any constant does -->
           <excludedMethods>
