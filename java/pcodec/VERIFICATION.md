@@ -181,24 +181,51 @@ reference), and every one agrees.
   each page gives back its payload byte for byte (ZSTD pages excepted).
 - PIT (`make mutants`, and the `mutation` CI job) mutates the library and runs the suites that
   need no oracle against each mutant: the vectors, unit tests and round trips. A mutant that
-  survives is a change to the code those suites cannot see. Each round of survivors so far was a
-  missing test or dead code, and was fixed: targeted vectors, math special values, unit tests,
-  dead code removed. That took the score from 87% to 91% (2,654 of 2,929 mutants, the
-  checker `Modes.Margins` and its hooks included). The build fails below 90%. The checker is
-  itself tested, without the oracle, in `OrderIndependenceTest`: its intervals hold the
-  quotient of every summation order and are no wider than Higham's bound, its comparisons
-  are exact at their boundaries, and it flags a constructed IntMult score tie between two
-  bases that both win (2^54 - 1 and 2^54 + 1, one f64).
-  The remaining survivors fall into three groups:
-  - the decision margins of the mode and delta heuristics (a comparison mutated from `<` to `<=`,
-    or a constant changed, that no recorded input sits close enough to the threshold to show);
-  - CORE-MATH's rounding corrections in `cbrt`, which only change exact cubes and the hardest
-    cases;
-  - bounds checks that a later check duplicates, which change the error a corrupt input gets but
-    not whether it is refused.
+  survives is a change to the code those suites cannot see. Each round of survivors was a
+  missing test or dead code, and was fixed: targeted vectors, math special values, CORE-MATH's
+  cbrt worst cases, unit tests, the reference's error kinds and payload messages, dead code
+  removed. That took the score from 87% to 92% (2,663 of 2,898 mutants). The build fails below
+  90%. The checker `Modes.Margins` is itself tested without the oracle, in
+  `OrderIndependenceTest`: its intervals hold the quotient of every summation order and are no
+  wider than Higham's bound, its comparisons are exact at their boundaries, and it flags a
+  constructed IntMult score tie between two bases that both win (2^54 - 1 and 2^54 + 1, one
+  f64).
+- `make mutants-oracle` runs PIT again on the survivors alone, with the oracle-backed suites
+  added (ParityTest, DictParityTest, PayloadParityTest, MathParityTest, ParquetFilesTest,
+  ExhaustiveParityTest). They kill 46 more, so 2,709 of the 2,898 mutants (93.5%) are killed by
+  some suite. Its first run left 204; the 13 of them that were dead code were removed, and 2
+  missing tests were added. The 189 left are grouped below, with what was established for each
+  group. Each group was examined through representative mutants, not each mutant alone.
+  - **CORE-MATH's cbrt, and pow10 and log2** (24). These are the refinement path, its second
+    stage and the exact-case fix-up. `vectors/cbrt-worst-cases.bin.gz` holds all of CORE-MATH's
+    worst cases (106,249 inputs whose cube root has 44 or more identical bits after the round
+    bit). Java equals the reference on each of them, negated and in other binades, and the
+    refinement changes 371 of them. The survivors are:
+    - mutants of the test against 3/2 ulp, which never held, in the worst cases or in 5·10^8
+      random inputs;
+    - "refine always", since refining a correctly rounded result changes nothing;
+    - the exact-case fix-up, whose assignment changed no result on any input, the 104,033
+      near-exact worst cases included;
+    - comparisons at exactly 2^-75, 2^-98, 10^±400 and log2's interval edge, where both sides
+      give the same value.
+  - **Heuristic decisions** (76). These are in IntMult's GCD scoring and false-position root,
+    FloatMult's candidates, FloatQuant, the choice of lookbacks, conv1 order, deltas and bins,
+    sampling, and the histogram's quicksort. Each mutant is a comparison moved by one (`<` to
+    `<=`) or an operation changed, in a computation whose result only matters through a later
+    threshold or a later rejection of the candidate. On every input of every suite, the outcome
+    is the reference's mode, deltas and bins.
+  - **Guards, bounds and sizes** (65). These are bounds checks that a later check repeats
+    (rejected with the same error kind), reads at the end of the zero-padded buffer (the same
+    zeros), the BitReader's and BitWriter's fast and slow paths and their buffer growth (the same
+    bytes), and loop and array bounds that only add empty iterations or slack.
+  - **Equality boundaries of exact functions** (19). These are Rust's casts, min and max, whose
+    Z3 theorems hold for the code as written; the quicksort's pivot and partition, whose
+    permutation the histogram's bins do not depend on; and the float helpers used only on
+    finite, positive samples.
+  - **The checker** (5). These are mutants in `Modes.Margins`' interval arithmetic that widen
+    its intervals. They can only flag more cases, and it flags none.
 
-  `hashCode` is excluded, since any constant satisfies its contract. PIT cannot afford the
-  oracle-backed suites, which judge the first group on every CI run.
+  `hashCode` is excluded, since any constant satisfies its contract.
 
 ## Differences found
 

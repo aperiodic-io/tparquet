@@ -89,7 +89,12 @@ make -C java/pcodec vectors-check
 make -C java/pcodec proofs
 ```
 
+```bash
+make -C java/pcodec mutants-oracle
+```
+
 `test` needs only Maven and a JDK. `parity` builds the oracle with cargo and runs every suite
 against it; `SCALE=8` multiplies the random cases. `vectors-check` re-records the golden vectors
-and fails if a byte changes. `proofs` needs `pip install z3-solver==4.13.0.0`.
+and fails if a byte changes. `proofs` needs `pip install z3-solver==4.13.0.0`. `mutants-oracle`
+(hours) runs PIT on the library and judges its survivors again with the oracle-backed suites.
 `.github/workflows/pcodec-java.yml` runs all of these.
