@@ -23,11 +23,10 @@ df.tparquet.write("out.parquet")                               # {"ts": "PCODEC"
 lf.filter(pl.col("qty") > 0).tparquet.sink("filtered.parquet")  # streamed, never all in memory
 ```
 
-Install it from a checkout of the repository together with the `tparquet` package, which is not
-on PyPI yet (it needs a Rust toolchain; [`INSTALL.md`](../INSTALL.md#polars) has the details):
+Install it from PyPI ([`INSTALL.md`](../INSTALL.md#polars) has building from a checkout):
 
 ```bash
-python -m pip install ./python ./polars-tparquet
+python -m pip install polars-tparquet
 ```
 
 Importing `polars_tparquet` registers the `tparquet` namespace on `DataFrame` and `LazyFrame`.

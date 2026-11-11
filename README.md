@@ -58,7 +58,7 @@ tparquet does for your data is still to run it on one of your own files.
 ## Try it on your own file
 
 ```sh
-cargo install --path rust/tparquet                          # the tparquet CLI
+cargo install tparquet                                      # the tparquet CLI
 
 tparquet encode trades.parquet trades.pcodec.parquet        # standard -> PCODEC, codec chosen per column
 tparquet inspect trades.pcodec.parquet                      # codec and size of every column
@@ -97,14 +97,15 @@ the evidence, and the work still needed before it goes to the Apache Parquet com
 
 ## Install
 
-The packages are not on PyPI or crates.io yet. Build them from a checkout of this repository
-(every package needs a Rust toolchain). [`INSTALL.md`](INSTALL.md) has the prerequisites, the
-steps for each use case on Linux, macOS and Windows, using the packages from your own project
-(Cargo, pip and uv, Go modules, Maven and Gradle, CMake), and troubleshooting. In short:
+Each release publishes the Rust crates to crates.io and the Python packages to PyPI
+([`RELEASING.md`](RELEASING.md)); the other packages build from a checkout of this repository
+(each needs a Rust toolchain). [`INSTALL.md`](INSTALL.md) has the prerequisites, the steps for
+each use case on Linux, macOS and Windows, using the packages from your own project (Cargo, pip
+and uv, Go modules, Maven and Gradle, CMake), and troubleshooting. In short:
 
 ```sh
-cargo install --path rust/tparquet           # CLI
-pip install ./python ./polars-tparquet       # Python, pandas, Polars, DuckDB (Python 3.10+)
+cargo install tparquet                       # CLI (from a checkout: cargo install --path rust/tparquet)
+pip install tparquet polars-tparquet         # Python, pandas, Polars, DuckDB (Python 3.10+)
 make -C duckdb build                         # DuckDB extension: duckdb/build/v{1.5.6,2.0.0}/tparquet.duckdb_extension
 cargo build --release -p tparquet-capi       # static library for Go; see go/README.md
 make -C java install                         # Java, Spark: the parquet-java fork; see java/README.md
@@ -236,7 +237,7 @@ Use plain ZSTD Parquet when the files must be read by tools you don't control.
 | Where | Package | Notes |
 |---|---|---|
 | Rust | [`rust/tparquet`](rust/tparquet) | writer with automatic codec choice, `transcode`, `inspect`, `verify`, and the `tparquet` CLI |
-| Rust, anything on arrow-rs 60 | [`rust/parquet`](rust/parquet) | a small fork of the arrow-rs `parquet` crate 60.1.0 that adds the codec; changes listed in [`FORK.md`](rust/parquet/FORK.md). Use it with `[patch.crates-io] parquet = { path = ... }` |
+| Rust, the `parquet` API | [`rust/parquet`](rust/parquet) | a small fork of the arrow-rs `parquet` crate 60.1.0 that adds the codec, published as `tparquet-parquet` (library name `parquet`); changes listed in [`FORK.md`](rust/parquet/FORK.md). Use it as `parquet = { package = "tparquet-parquet", version = "=60.1.0" }` |
 | Rust, no Parquet | [`rust/core`](rust/core) | the page payload codec alone |
 | C | [`rust/capi`](rust/capi) | C ABI over the core ([`tparquet.h`](rust/capi/include/tparquet.h)) |
 | Go | [`go/`](go) | arrow-go codec plugin (no fork: `compress.RegisterCodec`) and writer helpers |

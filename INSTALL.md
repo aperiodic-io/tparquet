@@ -1,7 +1,10 @@
 # Installing tparquet
 
-tparquet is not on PyPI, crates.io, Maven Central or the DuckDB extension repository yet.
-Every package builds from a checkout of this repository:
+Releases publish the Rust crates to crates.io (`tparquet`, `tparquet-core`, `tparquet-parquet`)
+and the Python packages to PyPI (`tparquet`, `polars-tparquet`); [`RELEASING.md`](RELEASING.md)
+says how. The sections below give the registry command first. Until the first release is out,
+and for every other package (Go, Java, Spark, Trino, DuckDB, C++), build from a checkout of this
+repository:
 
 ```bash
 git clone https://github.com/aperiodic-io/tparquet
@@ -43,16 +46,18 @@ tested in CI. The table says what to expect on each.
 | | Linux x86_64 | Linux arm64 | macOS (Apple silicon, Intel) | Windows |
 |---|---|---|---|---|
 | CLI, Rust, DataFusion | tested | builds | builds | builds |
-| Python, Polars | tested | wheel built in CI | builds | builds |
-| DuckDB extension | tested | builds | builds | manual steps |
+| Python, Polars | tested | wheel on PyPI | wheels on PyPI | wheel on PyPI |
+| DuckDB extension | tested | build scripts may work | build scripts may work | not supported by the build scripts |
 | Go | tested | builds | builds | not supported |
 | Java, Spark, Trino | tested | native library by hand | native library by hand | native library by hand |
 | C++ (Arrow fork) | tested | build scripts may work | not supported by the build scripts | not supported |
 | C reader | tested | builds | builds | builds |
 
 *builds*: pure Rust or cgo, with no platform-specific code; expected to work, but no test runs
-there. *Native library by hand*: the jar bundles the JNI library for Linux x86_64 only, and
-[Java on other platforms](#java-on-other-platforms) says how to supply it. On Windows, WSL 2
+there. *Wheel on PyPI*: the release workflow builds the wheel on that platform and checks that
+it installs and reads a file there. *Native library by hand*: the jar bundles the JNI library
+for Linux x86_64 only, and [Java on other platforms](#java-on-other-platforms) says how to
+supply it. On Windows, WSL 2
 with Ubuntu 24.04 gives you the tested Linux setup for every package.
 
 ## Prerequisites
@@ -110,7 +115,13 @@ On macOS, Homebrew has all of them: `brew install python go openjdk@21 maven uv`
 
 ## The `tparquet` CLI
 
-Linux, macOS and Windows:
+Linux, macOS and Windows, from crates.io:
+
+```bash
+cargo install tparquet
+```
+
+or from a checkout:
 
 ```bash
 cargo install --path rust/tparquet
@@ -128,15 +139,23 @@ tparquet inspect testdata/files/mixed.parquet
 ```
 
 `tparquet encode`, `decode`, `inspect` and `verify` are shown in the
-[README](README.md#try-it-on-your-own-file). To update, pull the repository and run
-`cargo install --path rust/tparquet` again. To remove it, `cargo uninstall tparquet`.
+[README](README.md#try-it-on-your-own-file). To update, run the install command again. To
+remove it, `cargo uninstall tparquet`.
 
 ## Python (pyarrow, pandas)
 
-The `tparquet` package is a Rust extension module built with maturin; pip downloads maturin by
-itself and builds it from source, which takes a few minutes the first time.
+From PyPI, into the active virtual environment:
 
-Into the active virtual environment, with pip (Linux, macOS, Windows):
+```bash
+python -m pip install "tparquet[pandas]"
+```
+
+PyPI has wheels for CPython 3.10 and later on Linux (x86_64, aarch64), macOS (Apple silicon,
+Intel) and Windows (x64); elsewhere pip builds the sdist, which needs a Rust toolchain. With uv:
+`uv add "tparquet[pandas]"`.
+
+From a checkout, the package is a Rust extension module built with maturin; pip downloads
+maturin by itself and builds it from source, which takes a few minutes the first time:
 
 ```bash
 python -m pip install "./python[pandas]"
@@ -147,7 +166,7 @@ The extras pull in the libraries each module needs: `pyarrow` (for `read_table` 
 and `duckdb` (`tparquet.duckdb`). Combine them as you need, `"./python[pandas,polars,duckdb]"`;
 without extras the package has no dependencies at all.
 
-With uv, in a project:
+With uv, from a checkout, in a project:
 
 ```bash
 uv add ./path/to/tparquet/python --extra pandas
@@ -179,9 +198,14 @@ shell after installing rustup, or run `. "$HOME/.cargo/env"`.
 ## Polars
 
 `polars-tparquet` (`scan_tparquet`, `read_tparquet`, the `tparquet` namespaces) is pure Python
-on top of the `tparquet` package and needs Polars 2.0 or later. Install both in one command,
-so that pip takes `tparquet` from the checkout (it is not on PyPI, and on its own pip would
-look for it there and fail):
+on top of the `tparquet` package and needs Polars 2.0 or later. From PyPI:
+
+```bash
+python -m pip install polars-tparquet
+```
+
+From a checkout, install both in one command, so that pip takes `tparquet` from the checkout
+too (on its own, pip would look for it on PyPI):
 
 ```bash
 python -m pip install ./python ./polars-tparquet
@@ -232,31 +256,27 @@ con.sql("SELECT count(*) FROM trades")
 
 ### DuckDB extension
 
-The extension is built against DuckDB's C extension API v1.5.6 and tested with DuckDB 2.0.0;
-the same file loads in later DuckDB releases that still serve C API v1, on the platform it was
-built on.
+The extension is DuckDB's own parquet extension with the codec added, as a patch over each
+DuckDB release ([`duckdb/FORK.md`](duckdb/FORK.md)). It is built for DuckDB 1.5.6 and 2.0.0, and
+a build loads only into the DuckDB version and platform it was built for. Building it compiles
+DuckDB, so it needs CMake, Ninja and a C++ compiler besides Rust. On Ubuntu:
 
-Linux and macOS:
+```bash
+sudo apt-get install cmake ninja-build g++
+```
 
 ```bash
 make -C duckdb build
 ```
 
-This writes `duckdb/build/tparquet.duckdb_extension`. Keep that file name: DuckDB derives the
-entry point from it. Copy the file wherever you like.
+This writes `duckdb/build/v1.5.6/tparquet.duckdb_extension` and
+`duckdb/build/v2.0.0/tparquet.duckdb_extension` (`VERSIONS=2.0.0` builds one). Keep the file
+name: DuckDB derives the entry point from it. The first build takes a while, as it compiles
+DuckDB; later ones are incremental. `build.sh` is a bash script; on macOS the same command
+should work with `brew install cmake ninja`, and on Windows use WSL 2.
 
-Windows (untested; the Makefile assumes a Unix shell), in PowerShell:
-
-```powershell
-cargo build --release -p tparquet-duckdb --lib --bin package-extension
-```
-
-```powershell
-target\release\package-extension.exe target\release\tparquet_duckdb.dll tparquet.duckdb_extension
-```
-
-The extension is not signed (DuckDB signs only the extensions it builds itself), so DuckDB
-loads it only with unsigned extensions allowed. In the DuckDB CLI:
+The build is not signed by DuckDB, so DuckDB loads it only with unsigned extensions allowed. In
+the DuckDB CLI:
 
 ```bash
 duckdb -unsigned
@@ -277,45 +297,50 @@ con.execute("LOAD '/path/to/tparquet.duckdb_extension'")
 ```
 
 Other DuckDB clients (Go, Java, Node.js, R, ...) set the same `allow_unsigned_extensions`
-configuration option when they open the database, then run the same `LOAD`. Each operating
-system and architecture needs its own build: build it on each platform you deploy to.
+configuration option when they open the database, then run the same `LOAD`. To load without
+that option on DuckDB 2.0.0, sign the build with your own key and serve it from an extension
+repository that names the key ([`duckdb/README.md`](duckdb/README.md#signing)).
 
 ## Rust
 
 The `tparquet` crate (writer with automatic codec choice, reader, `transcode`, `inspect`,
-`verify`) is built on a small fork of the arrow-rs `parquet` crate 60.1.0. Depend on both, and
-patch `parquet` so that every crate in your build uses the fork:
+`verify`) is built on `tparquet-parquet`, a small fork of the arrow-rs `parquet` crate 60.1.0
+that adds the codec ([`rust/parquet/FORK.md`](rust/parquet/FORK.md)). From crates.io:
+
+```toml
+[dependencies]
+tparquet = "0.1"
+arrow-array = "60.1"
+arrow-schema = "60.1"
+```
+
+From git or a checkout, with nothing else to add:
 
 ```toml
 [dependencies]
 tparquet = { git = "https://github.com/aperiodic-io/tparquet" }
-arrow-array = "60.1"
-arrow-schema = "60.1"
-
-[patch.crates-io]
-parquet = { git = "https://github.com/aperiodic-io/tparquet", version = "=60.1.0" }
 ```
-
-The repository holds two forks of `parquet` (60.1.0 here, 59.3.2 for DataFusion), so the
-patch names the version it wants. With a local checkout instead, use paths:
 
 ```toml
 [dependencies]
 tparquet = { path = "../tparquet/rust/tparquet" }
-
-[patch.crates-io]
-parquet = { path = "../tparquet/rust/parquet" }
 ```
 
-The `[patch.crates-io]` line is required: `tparquet` depends on `parquet = "=60.1.0"` with the
-fork's `pcodec` feature, which the crates.io release does not have, so without the patch Cargo
-cannot resolve the dependency. With it, any crate in your build that uses `parquet` 60
-(including your own code and arrow-rs readers) reads PCODEC files. Your other Arrow crates must
-be on arrow 60 as well.
+`tparquet::parquet` re-exports the fork, so `tparquet::parquet::arrow::ArrowWriter` and the rest
+of the `parquet` API read and write PCODEC. To use the fork directly, under its usual name:
 
-Pin a commit with `rev = "..."` in both git lines for reproducible builds. To use only the page
-payload codec, without Parquet, depend on `tparquet-core` from the same repository (no patch
-needed).
+```toml
+[dependencies]
+parquet = { package = "tparquet-parquet", version = "=60.1.0" }
+```
+
+Your other Arrow crates must be on arrow 60. Crates in your build that depend on upstream
+`parquet` keep upstream's crate, which does not have the codec: Cargo's `[patch]` replaces a
+crate only with a package of the same name, so the fork cannot stand in for them. Read and write
+PCODEC files through `tparquet` or `tparquet-parquet`.
+
+Pin a commit with `rev = "..."` on a git dependency for reproducible builds. To use only the
+page payload codec, without Parquet, depend on `tparquet-core`.
 
 ## DataFusion
 
@@ -331,8 +356,9 @@ tparquet-datafusion = { git = "https://github.com/aperiodic-io/tparquet" }
 parquet = { git = "https://github.com/aperiodic-io/tparquet", version = "=59.3.2" }
 ```
 
-`version = "=59.3.2"` selects the fork in `datafusion/parquet`. DataFusion 55.2 needs Rust 1.94
-or later. With a local checkout:
+The patch is what makes DataFusion's own Parquet reader (and `STORED AS PARQUET`) read PCODEC;
+`version = "=59.3.2"` pins the fork's version. DataFusion 55.2 needs Rust 1.94 or later. With a
+local checkout:
 
 ```toml
 [dependencies]
@@ -343,8 +369,8 @@ tparquet-datafusion = { path = "../tparquet/datafusion" }
 parquet = { path = "../tparquet/datafusion/parquet" }
 ```
 
-Use `tparquet` (arrow 60) or `tparquet-datafusion` (arrow 59) in a Cargo workspace, not
-both: each needs its own fork patched in for `parquet`. Usage is in
+`tparquet-datafusion` is not on crates.io: a published crate cannot carry the patch. It is on
+arrow 59 and `tparquet` on arrow 60, so their Arrow types do not mix in one program. Usage is in
 [`datafusion/README.md`](datafusion/README.md#use).
 
 ## Go
@@ -638,12 +664,11 @@ C++ build above, CMake's `tparquet::read` target links it for you. For the codec
 |---|---|
 | a reader without tparquet fails on a file (DuckDB's `read_parquet`: `TProtocolException: Invalid data`; upstream Trino: `Required field 'codec' was not present!`; pyarrow, Polars and others: an unknown or unsupported codec) | the file uses PCODEC and the reader does not have the codec. Read it with tparquet's reader for that tool, or write a standard copy: `tparquet decode in.parquet out.parquet` |
 | `pip install` fails with `can't find Rust compiler` | Rust is not on `PATH` in that shell: open a new shell after installing rustup, or `. "$HOME/.cargo/env"` |
-| `pip install ./polars-tparquet` fails with `ERROR: No matching distribution found for tparquet` | install `./python` in the same command: `pip install ./python ./polars-tparquet` |
-| Cargo: ``package `tparquet` depends on `parquet` with feature `pcodec` but `parquet` does not have that feature`` | the `[patch.crates-io] parquet = ...` line is missing from your top-level `Cargo.toml` (Cargo ignores patches in dependencies) |
-| Cargo: ``patch for `parquet` ... resolved to more than one candidate`` | add `version = "=60.1.0"` (or `"=59.3.2"` for DataFusion) to the git patch |
+| `pip install ./polars-tparquet` (from a checkout) fails with `ERROR: No matching distribution found for tparquet` | before the first release, `tparquet` is not on PyPI: install `./python` in the same command, `pip install ./python ./polars-tparquet` |
+| Cargo (DataFusion): ``package `tparquet-datafusion` depends on `parquet` with feature `pcodec` but `parquet` does not have that feature`` | the `[patch.crates-io] parquet = ...` line is missing from your top-level `Cargo.toml` (Cargo ignores patches in dependencies) |
 | Go: `cannot find .../target/release/libtparquet_capi.a` | from a checkout, build it with `cargo build --release -p tparquet-capi`; from the module cache (the path has `pkg/mod` in it), build with `-tags tparquet_external` and `CGO_LDFLAGS` |
 | DuckDB: `extension ... could not be loaded because its signature is either missing or invalid` | start DuckDB with `-unsigned`, or set `allow_unsigned_extensions` |
-| DuckDB: `The file was built for the platform ...` | the extension was built on another OS or architecture: build it on the machine that loads it |
+| DuckDB: `The file was built for the platform ...`, or for another DuckDB version | build the extension for the DuckDB version and on the platform that loads it |
 | Java: `UnsatisfiedLinkError: no tparquet_jni` | no JNI library for this platform in the jar: see [Java on other platforms](#java-on-other-platforms) |
 | Java or Spark fail to read the footer or the codec of a PCODEC file | upstream's parquet-java is on the class path ahead of the fork: check that only the `1.17.0-tparquet` jars of the three modules are there (`mvn dependency:tree`, or Spark's `jars/`) |
 | Trino: `already loaded in another classloader` | remove `-Dtparquet.jni.library` from `jvm.config`: each catalog loads its own copy of the bundled library |

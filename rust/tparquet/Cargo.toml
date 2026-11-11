@@ -6,12 +6,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+readme = "README.md"
+keywords = ["parquet", "pcodec", "compression", "arrow", "time-series"]
+categories = ["compression", "encoding", "command-line-utilities"]
 default-run = "tparquet"
+# published on crates.io (scripts/check-publish.sh): gen-testdata and the tests need this
+# repository's testdata/, so the package has only the library and the tparquet CLI
+exclude = ["src/bin/gen-testdata", "tests"]
 
 [dependencies]
 parquet = { workspace = true, features = ["arrow", "zstd", "snap", "lz4", "brotli", "flate2-zlib-rs", "pcodec"] }
-tparquet-core = { path = "../core" }
+tparquet-core = { version = "0.1.0", path = "../core" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 arrow-buffer.workspace = true

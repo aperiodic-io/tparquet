@@ -1,8 +1,15 @@
 # Fork of the arrow-rs `parquet` crate
 
 This directory is the `parquet` crate as published on crates.io, with the PCODEC codec of
-`spec/FORMAT.md` added. The crate name stays `parquet`; the root workspace points every
-`parquet = "60.1.0"` dependency here with `[patch.crates-io]`.
+`spec/FORMAT.md` added. Its package is renamed `tparquet-parquet`, so that it can be published
+on crates.io (the name `parquet` is upstream's); the library keeps the name `parquet`, so code
+uses it as `parquet::...`. The workspace depends on it as
+`parquet = { package = "tparquet-parquet", ... }`.
+
+The version stays upstream's, so `tparquet-parquet` 60.1.0 is `parquet` 60.1.0 with this
+patch. A published version cannot change: a change to the fork after its release needs a new
+version (60.1.1 for the same upstream release, if upstream has none), and the dependency
+requirement in the root `Cargo.toml` with it.
 
 | | |
 |---|---|
@@ -22,8 +29,9 @@ intended change, which must also be listed below.
 
 | File | Item | Change | Why |
 |---|---|---|---|
+| `Cargo.toml` | `[package]` | `name = "tparquet-parquet"`; `description` and `repository` name this fork | crates.io: `parquet` is upstream's name; the library name stays `parquet` |
 | `Cargo.toml` | `[features]` | new feature `pcodec = ["dep:tparquet-core"]`, in `default` | the codec, default on like the other codecs |
-| `Cargo.toml` | `[dependencies]`, `[dev-dependencies]` | `tparquet-core = { path = "../core" }` (optional; and for tests) | the payload encoder and decoder; unit tests build every codec, as upstream does with `cfg(any(feature, test))` |
+| `Cargo.toml` | `[dependencies]`, `[dev-dependencies]` | `tparquet-core = { version = "0.1.0", path = "../core" }` (optional; and for tests) | the payload encoder and decoder; unit tests build every codec, as upstream does with `cfg(any(feature, test))` |
 | `src/basic.rs` | `CompressionCodec` (thrift enum) | `PCODEC = 20547` | the codec id of spec section 2 |
 | `src/basic.rs` | `Compression` | variant `PCODEC(PcodecLevel)` | the writer-side codec choice |
 | `src/basic.rs` | `From<CompressionCodec> for Compression`, `From<Compression> for CompressionCodec` | `PCODEC` arms | conversion to and from the footer |
@@ -80,12 +88,12 @@ it.
 
 ## Tests
 
-- `cargo test -p parquet --lib -- pcodec` and `cargo test -p parquet --test arrow_writer -- pcodec`:
+- `cargo test -p tparquet-parquet --lib -- pcodec` and `cargo test -p tparquet-parquet --test arrow_writer -- pcodec`:
   the fork's tests (round trip of every physical type PCODEC models, required and optional,
   V1 and V2 pages, with and without dictionary pages, levels 0, 8 and 12, logical types,
   lists in a struct, NaN payloads and signed zeros bit for bit, the fallback for strings and
   booleans, page types, codec in the metadata, the footer key, string parsing).
-- The upstream suite: `cargo test -p parquet --all-features --no-fail-fast` (`make
+- The upstream suite: `cargo test -p tparquet-parquet --all-features --no-fail-fast` (`make
   fork-upstream-tests`), without the `parquet-testing` and `arrow-testing` data. With the fork:
   1806 tests pass and 340 fail (335 test functions and 5 doc tests); every failure is missing
   data: 199 panic in `arrow::util::test_util::parquet_test_data`, 4 in `arrow_test_data`, and
@@ -100,7 +108,7 @@ The repository's `.cargo/mutants.toml` excludes `rust/parquet/**`. The fork's ow
 mutated with:
 
 ```
-cargo mutants --no-config -p parquet \
+cargo mutants --no-config -p tparquet-parquet \
   -f rust/parquet/src/basic.rs -f rust/parquet/src/compression.rs \
   -f rust/parquet/src/column/writer/mod.rs -f rust/parquet/src/file/writer.rs \
   --re 'PcodecLevel|PcodecCodec|with_pcodec_version|CodecOptionsBuilder::set_physical_type|CodecOptionsBuilder::build|create_codec|<impl From<CompressionCodec> for Compression>::from|<impl From<Compression> for CompressionCodec>::from|<impl FromStr for Compression>::from_str|write_metadata' \
@@ -126,7 +134,7 @@ The `Interval(MonthDayNano)` arm of `FixedLenByteArrayReader::consume_batch` (an
 too large to mutate whole) was mutated on its diff alone:
 
 ```
-cargo mutants --no-config -p parquet -f rust/parquet/src/arrow/array_reader/fixed_len_byte_array.rs \
+cargo mutants --no-config -p tparquet-parquet -f rust/parquet/src/arrow/array_reader/fixed_len_byte_array.rs \
   --in-diff <diff of the change> --cargo-arg=--lib -- -- arrow::array_reader::fixed_len_byte_array
 ```
 
