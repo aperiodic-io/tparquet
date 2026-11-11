@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -145,7 +146,46 @@ class MathVectorsTest {
   static final int[] SPECIAL_FNS = {0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12};
 
   static double[] args(int fn) {
+    if (fn == 1) {
+      double[] sp = specials();
+      double[] wc = cbrtWorstCases();
+      double[] res = Arrays.copyOf(sp, sp.length + 4 * wc.length);
+      for (int i = 0; i < wc.length; i++) {
+        // each worst case, negated, and scaled by 2^-600 and 2^600 (multiples of 3: the same
+        // significand problem in another binade)
+        res[sp.length + 4 * i] = wc[i];
+        res[sp.length + 4 * i + 1] = -wc[i];
+        res[sp.length + 4 * i + 2] = wc[i] * 0x1p-600;
+        res[sp.length + 4 * i + 3] = wc[i] * 0x1p600;
+      }
+      return res;
+    }
     return fn == 2 ? powArgs() : specials();
+  }
+
+  /** CORE-MATH's worst cases for cbrt (vectors/cbrt-worst-cases.NOTICE) */
+  static double[] cbrtWorstCases() {
+    Path p = Vectors.path().resolveSibling("cbrt-worst-cases.bin.gz");
+    try (java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(
+        new java.util.zip.GZIPInputStream(Files.newInputStream(p))))) {
+      List<Double> v = new ArrayList<>();
+      byte[] b = new byte[8];
+      while (true) {
+        try {
+          in.readFully(b);
+        } catch (java.io.EOFException e) {
+          break;
+        }
+        v.add(Double.longBitsToDouble(java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN).getLong()));
+      }
+      double[] res = new double[v.size()];
+      for (int i = 0; i < res.length; i++) {
+        res[i] = v.get(i);
+      }
+      return res;
+    } catch (java.io.IOException e) {
+      throw new java.io.UncheckedIOException(e);
+    }
   }
 
   /** results that only need to agree as NaN or not (glibc's log2 NaN payloads are not pcodec's) */
