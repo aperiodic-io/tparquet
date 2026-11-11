@@ -163,4 +163,79 @@ class ApiTest {
     r.readUint(3);
     assertThrows(PcoException.class, () -> r.readAlignedBytes(1));
   }
+
+  @Test
+  void compressRejectsRawValuesWiderThanTheType() {
+    ChunkConfig c = new ChunkConfig();
+    long[][] bad = {
+      {NumberType.I32.ordinal(), -1L}, // sign-extended, not the 32 raw bits
+      {NumberType.U16.ordinal(), 100_000},
+      {NumberType.U8.ordinal(), 256},
+      {NumberType.F32.ordinal(), 1L << 32},
+      {NumberType.F16.ordinal(), 1L << 16},
+    };
+    for (long[] b : bad) {
+      NumberType t = NumberType.values()[(int) b[0]];
+      PcoException e = assertThrows(PcoException.class, () -> Pco.compress(t, new long[] {5, b[1], 7}, c), t.toString());
+      assertEquals(PcoException.Kind.INVALID_ARGUMENT, e.kind());
+      assertThrows(PcoException.class, () -> Pco.chunkMeta(t, new long[] {5, b[1], 7}, c), t.toString());
+    }
+    // the widest values of each type are fine
+    for (NumberType t : NumberType.values()) {
+      long max = t.latent.mask;
+      long[] nums = {0, max, max >>> 1};
+      assertArrayEquals(nums, Pco.decompress(Pco.compress(t, nums, c.withEnable8Bit(true)), t).nums, t.toString());
+    }
+  }
+
+  @Test
+  void decodersRefuseARangeOutsideTheArray() {
+    byte[] f = Pco.compress(NumberType.I64, new long[] {1, 2, 3}, new ChunkConfig());
+    // a file inside a larger array: decoded in place, its end given in the array's offsets
+    byte[] big = new byte[f.length + 14];
+    java.util.Arrays.fill(big, (byte) 0x55);
+    System.arraycopy(f, 0, big, 4, f.length);
+    long[] sum = new long[1];
+    assertEquals(4 + f.length, Pco.decompress(big, 4, f.length, NumberType.I64, -1, (b, n) -> {
+      for (int i = 0; i < n; i++) {
+        sum[0] += b[i];
+      }
+    }));
+    assertEquals(6, sum[0]);
+    assertThrows(IndexOutOfBoundsException.class, () -> Pco.decompress(f, 0, f.length + 1, NumberType.I64, -1, (b, n) -> { }));
+    assertThrows(IndexOutOfBoundsException.class, () -> Pco.decompress(f, -1, 3, NumberType.I64, -1, (b, n) -> { }));
+    assertThrows(IndexOutOfBoundsException.class, () -> Pco.decompress(f, 2, f.length, NumberType.I64, -1, (b, n) -> { }));
+    assertThrows(IndexOutOfBoundsException.class, () -> Pco.readHeader(f, 0, f.length + 1));
+  }
+
+  @Test
+  void wholeFileDecodeCanBeBounded() {
+    // one chunk of 2^16 equal numbers is a few dozen bytes; 200 copies of it claim 13 million
+    byte[] one = Pco.compress(NumberType.I64, new long[1 << 16], new ChunkConfig().withPagingSpec(PagingSpec.equalPagesUpTo(1 << 16)));
+    Pco.Header h = Pco.readHeader(one, 0, one.length);
+    byte[] chunk = java.util.Arrays.copyOfRange(one, h.bodyStart, one.length - 1);
+    java.io.ByteArrayOutputStream bomb = new java.io.ByteArrayOutputStream();
+    bomb.write(one, 0, h.bodyStart);
+    for (int i = 0; i < 200; i++) {
+      bomb.write(chunk, 0, chunk.length);
+    }
+    bomb.write(0);
+    byte[] b = bomb.toByteArray();
+    assertTrue(b.length < 20_000, b.length + " bytes");
+    Pco.CountExceeded e = assertThrows(Pco.CountExceeded.class, () -> Pco.decompress(b, NumberType.I64, 1_000_000));
+    assertEquals(16L << 16, e.count);
+    assertEquals(200 << 16, Pco.decompress(b, NumberType.I64, 200 << 16).nums.length);
+    assertEquals(200 << 16, Pco.decompress(b, NumberType.I64).nums.length);
+  }
+
+  @Test
+  void bitWriterGrowsToTheLimitAndNoFurther() {
+    assertEquals(512, BitWriter.grownCapacity(256, 300));
+    assertEquals(1 << 30, BitWriter.grownCapacity(1 << 29, (1 << 29) + 1));
+    assertEquals(BitWriter.MAX_CAPACITY, BitWriter.grownCapacity(1 << 30, (1L << 30) + 1));
+    assertEquals(BitWriter.MAX_CAPACITY, BitWriter.grownCapacity(1 << 30, BitWriter.MAX_CAPACITY));
+    PcoException e = assertThrows(PcoException.class, () -> BitWriter.grownCapacity(1 << 30, BitWriter.MAX_CAPACITY + 1L));
+    assertEquals(PcoException.Kind.INVALID_ARGUMENT, e.kind());
+    assertThrows(PcoException.class, () -> BitWriter.grownCapacity(1 << 30, (long) Integer.MAX_VALUE + 9));
+  }
 }

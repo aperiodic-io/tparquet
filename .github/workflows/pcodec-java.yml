@@ -12,12 +12,14 @@ on:
       - "java/pcodec/**"
       - "rust/core/**"
       - "testdata/payloads/**"
+      - "testdata/files/**"
       - ".github/workflows/pcodec-java.yml"
   pull_request:
     paths:
       - "java/pcodec/**"
       - "rust/core/**"
       - "testdata/payloads/**"
+      - "testdata/files/**"
       - ".github/workflows/pcodec-java.yml"
   schedule:
     - cron: "41 4 * * 3" # weekly: the parity suites at 8x scale, and mutation testing

@@ -9,47 +9,25 @@ final class BitReader {
   private static final java.lang.invoke.VarHandle LONG_LE =
       java.lang.invoke.MethodHandles.byteArrayViewVarHandle(long[].class, java.nio.ByteOrder.LITTLE_ENDIAN);
 
-  /** bytes after {@code end} that are zero in {@code src}, so that word reads need no checks */
-  static final int PADDING = 16;
-
   final byte[] src;
-  /** whether src holds at least PADDING zero bytes after end */
-  private final boolean padded;
   private final int start;
   private final int end;
   /** bit position relative to {@code start} */
   long bitIdx;
 
+  /** Reads {@code src[start, end)}; the caller has checked that range lies in {@code src}. */
   BitReader(byte[] src, int start, int end) {
-    this(src, start, end, false);
-  }
-
-  /** {@code padded}: src[end, end + PADDING) exists and is zero */
-  BitReader(byte[] src, int start, int end, boolean padded) {
     this.src = src;
     this.start = start;
     this.end = end;
-    this.padded = padded;
-  }
-
-  /** a copy of src[off, off + len) followed by PADDING zero bytes */
-  static byte[] padCopy(byte[] src, int off, int len) {
-    return java.util.Arrays.copyOfRange(src, off, off + len + PADDING);
   }
 
   long u64At(long byteIdx) {
     long abs = start + byteIdx;
-    if (padded && abs + 8 <= end + PADDING) {
+    if (abs + 8 <= end) {
       return (long) LONG_LE.get(src, (int) abs);
     }
-    if (abs + 8 <= end) {
-      long r = 0;
-      int i = (int) abs;
-      for (int k = 7; k >= 0; k--) {
-        r = (r << 8) | (src[i + k] & 0xffL);
-      }
-      return r;
-    }
+    // the last bytes: past the end reads as zeros, like the reference's padding
     long r = 0;
     for (int k = 7; k >= 0; k--) {
       long j = abs + k;

@@ -1,8 +1,6 @@
 package io.aperiodic.pcodec;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 /**
  * pcodec's standalone format, as {@code pco::standalone} 1.0.4 writes and reads it: {@link
@@ -25,8 +23,13 @@ public final class Pco {
 
   // ------------------------------------------------------------ compression
 
-  /** {@code simple_compress}: a standalone file (no uniform type, an n hint of the count). */
+  /**
+   * {@code simple_compress}: a standalone file (no uniform type, an n hint of the count). Each
+   * number is the raw bits of a value of {@code type}, zero-extended: a value with bits above
+   * the type's width (a sign-extended {@code int}, say) is an invalid argument.
+   */
   public static byte[] compress(NumberType type, long[] nums, ChunkConfig config) {
+    checkRaw(type, nums);
     BitWriter w = new BitWriter();
     writeHeader(w, nums.length, 0);
     long[] nPerPage = config.pagingSpec.nPerPage(nums.length);
@@ -44,6 +47,18 @@ public final class Pco {
     }
     w.writeAlignedBytes(new byte[] {MAGIC_TERMINATION_BYTE});
     return w.toByteArray();
+  }
+
+  /** the reference's numbers are typed, so it cannot be given bits a type does not have */
+  static void checkRaw(NumberType type, long[] nums) {
+    long outside = ~type.latent.mask;
+    for (int i = 0; i < nums.length; i++) {
+      if ((nums[i] & outside) != 0) {
+        throw PcoException.invalidArgument(
+            "number " + i + " (0x" + Long.toHexString(nums[i]) + ") has bits above the " + type.bits()
+                + " bits of " + type);
+      }
+    }
   }
 
   static void writeHeader(BitWriter w, long nHint, int uniformTypeByte) {
@@ -87,6 +102,7 @@ public final class Pco {
 
   /** The chunk metadata a chunk of these numbers would get (one chunk, the config's pages). */
   public static ChunkMeta chunkMeta(NumberType type, long[] nums, ChunkConfig config) {
+    checkRaw(type, nums);
     return ChunkCompressor.create(type, nums, config).meta;
   }
 
@@ -114,6 +130,7 @@ public final class Pco {
   }
 
   public static Header readHeader(byte[] src, int offset, int length) {
+    java.util.Objects.checkFromIndexSize(offset, length, src.length);
     BitReader r = new BitReader(src, offset, offset + length);
     byte[] magic = r.readAlignedBytes(4);
     r.checkInBounds();
@@ -187,11 +204,6 @@ public final class Pco {
    */
   public static int decompress(
       byte[] src, int offset, int length, NumberType type, long maxNumbers, BatchSink sink) {
-    return offset + decompressPadded(BitReader.padCopy(src, offset, length), length, type, maxNumbers, sink);
-  }
-
-  private static int decompressPadded(byte[] src, int length, NumberType type, long maxNumbers, BatchSink sink) {
-    int offset = 0;
     Header h = readHeader(src, offset, length);
     int end = offset + length;
     int pos = h.bodyStart;
@@ -216,7 +228,7 @@ public final class Pco {
       }
       int n = pre.readInt(BITS_TO_ENCODE_N_ENTRIES) + 1;
       pre.checkInBounds();
-      BitReader r = new BitReader(src, pre.bytePos(), end, true);
+      BitReader r = new BitReader(src, pre.bytePos(), end);
       ChunkMeta meta = ChunkMeta.readFrom(r, h.formatMajor, type.latent);
       ChunkDecompressor cd = new ChunkDecompressor(type, meta, n);
       if (maxNumbers >= 0 && total + n > maxNumbers) {
@@ -243,28 +255,41 @@ public final class Pco {
     }
   }
 
-  /** Decodes a whole standalone file (bytes after the footer are ignored, as in the reference). */
+  /**
+   * Decodes a whole standalone file (bytes after the footer are ignored, as in the reference).
+   * A file can hold far more numbers than bytes; for untrusted input, {@link #decompress(byte[],
+   * NumberType, long)} bounds the count.
+   */
   public static Decoded decompress(byte[] src, NumberType type) {
-    List<long[]> parts = new ArrayList<>();
-    long[] count = new long[1];
+    return decompress(src, type, MAX_ARRAY);
+  }
+
+  /** the longest Java array this decodes into */
+  static final int MAX_ARRAY = Integer.MAX_VALUE - 8;
+
+  /**
+   * Decodes a whole standalone file of at most {@code maxNumbers} numbers, throwing {@link
+   * CountExceeded} before decoding a chunk that would go past it.
+   */
+  public static Decoded decompress(byte[] src, NumberType type, long maxNumbers) {
+    long max = Math.min(maxNumbers, MAX_ARRAY);
+    long[][] out = {new long[1024]};
+    int[] count = new int[1];
     int end =
         decompress(
             src,
             0,
             src.length,
             type,
-            -1,
+            max,
             (b, len) -> {
-              parts.add(Arrays.copyOf(b, len));
+              if (count[0] + len > out[0].length) {
+                out[0] = Arrays.copyOf(out[0], (int) Math.min(max, Math.max(2L * out[0].length, count[0] + len)));
+              }
+              System.arraycopy(b, 0, out[0], count[0], len);
               count[0] += len;
             });
-    long[] out = new long[(int) count[0]];
-    int at = 0;
-    for (long[] p : parts) {
-      System.arraycopy(p, 0, out, at, p.length);
-      at += p.length;
-    }
-    return new Decoded(type, out, end);
+    return new Decoded(type, count[0] == out[0].length ? out[0] : Arrays.copyOf(out[0], count[0]), end);
   }
 
   /** The number type of the first chunk (or the uniform type), or null for a file without chunks. */

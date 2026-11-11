@@ -37,6 +37,11 @@ byte[] payload = codec.compress(plainBytes, 0, plainBytes.length, ParquetType.DO
 byte[] page = codec.decompress(payload, plainBytes.length);
 ```
 
+Numbers are raw bits, zero-extended: `Pco.compress(NumberType.I32, ...)` takes `x & 0xffffffffL`,
+not a sign-extended `int`, and rejects a value with bits above its type. A file can hold far more
+numbers than it has bytes, so for untrusted input decode with a bound,
+`Pco.decompress(file, type, maxNumbers)`, or batch by batch through the `BatchSink` overload.
+
 `PcodecPayload` writes RAW, PCO and DECIMAL payloads exactly as the reference does. ZSTD mode
 (FORMAT.md 4.4) goes through a `ZstdCodec` you supply, because Zstandard output depends on the
 Zstandard implementation and the upstream profile of the codec drops the mode. Without one, the

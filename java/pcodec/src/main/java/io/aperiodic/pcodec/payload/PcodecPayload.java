@@ -183,6 +183,18 @@ public final class PcodecPayload {
    * allocated before the payload shows it can produce that many bytes.
    */
   public byte[] decompress(byte[] payload, int off, int len, int expectedLen) {
+    return decode(payload, off, len, null, 0, expectedLen);
+  }
+
+  /** Decodes into {@code dst[dstOff, dstOff + dstLen)}, which it must fill exactly. */
+  public void decompress(byte[] payload, int off, int len, byte[] dst, int dstOff, int dstLen) {
+    java.util.Objects.checkFromIndexSize(dstOff, dstLen, dst.length);
+    decode(payload, off, len, dst, dstOff, dstLen);
+  }
+
+  /** decodes into dst at dstOff (or, without dst, into a new array), returning the array */
+  private byte[] decode(byte[] payload, int off, int len, byte[] dst, int dstOff, int expectedLen) {
+    java.util.Objects.checkFromIndexSize(off, len, payload.length);
     if (expectedLen < 0) {
       throw new IllegalArgumentException("negative expected length " + expectedLen);
     }
@@ -192,30 +204,28 @@ public final class PcodecPayload {
     switch (mode) {
       case MODE_RAW:
         check(expectedLen, bodyLen);
-        return Arrays.copyOfRange(payload, bodyOff, bodyOff + bodyLen);
+        if (dst == null) {
+          return Arrays.copyOfRange(payload, bodyOff, bodyOff + bodyLen);
+        }
+        System.arraycopy(payload, bodyOff, dst, dstOff, bodyLen);
+        return dst;
       case MODE_ZSTD:
         {
           // RFC 8878 3.1.1.2: a block decodes to at most 128 KiB and costs at least 4 bytes
           if ((long) expectedLen > (long) (bodyLen / 4) * (128 << 10)) {
             throw new PayloadException("truncated");
           }
-          byte[] dst = new byte[expectedLen];
-          zstdInto(payload, bodyOff, bodyLen, dst, 0, expectedLen);
-          return dst;
+          byte[] out = dst == null ? new byte[expectedLen] : dst;
+          zstdInto(payload, bodyOff, bodyLen, out, dst == null ? 0 : dstOff, expectedLen);
+          return out;
         }
       default:
         {
-          Sink s = new Sink(expectedLen);
+          Sink s = new Sink(dst, dstOff, expectedLen);
           numbers(mode, payload, bodyOff, bodyLen, s, expectedLen);
-          return s.bytes();
+          return dst == null ? s.bytes() : dst;
         }
     }
-  }
-
-  /** Decodes into {@code dst[dstOff, dstOff + dstLen)}, which it must fill exactly. */
-  public void decompress(byte[] payload, int off, int len, byte[] dst, int dstOff, int dstLen) {
-    byte[] out = decompress(payload, off, len, dstLen);
-    System.arraycopy(out, 0, dst, dstOff, dstLen);
   }
 
   private void zstdInto(byte[] src, int off, int len, byte[] dst, int dstOff, int dstLen) {
@@ -251,22 +261,37 @@ public final class PcodecPayload {
     return len / width;
   }
 
-  /** decoded bytes, grown as numbers arrive (never beyond the expected size) */
+  /**
+   * Decoded bytes: written into the caller's buffer, or into one grown as numbers arrive, never
+   * beyond the expected size.
+   */
   static final class Sink {
     private byte[] out;
+    private final int base;
+    private final int cap;
+    private final boolean grow;
     private int len;
 
-    Sink(int expectedLen) {
-      out = new byte[Math.min(expectedLen, 1 << 16)];
+    /** into {@code dst[base, base + cap)}, or, without dst, into an array of at most cap */
+    Sink(byte[] dst, int base, int cap) {
+      this.grow = dst == null;
+      this.out = grow ? new byte[Math.min(cap, 1 << 16)] : dst;
+      this.base = grow ? 0 : base;
+      this.cap = cap;
     }
 
     void put(long v, int width) {
-      if (len + width > out.length) {
-        out = Arrays.copyOf(out, Math.max(len + width, out.length * 2));
+      if (len + width > cap) {
+        throw new PayloadException("decodes to more than " + cap + " bytes");
       }
+      if (grow && len + width > out.length) {
+        out = Arrays.copyOf(out, (int) Math.min(cap, Math.max(len + width, 2L * out.length)));
+      }
+      int at = base + len;
       for (int b = 0; b < width; b++) {
-        out[len++] = (byte) (v >>> (8 * b));
+        out[at + b] = (byte) (v >>> (8 * b));
       }
+      len += width;
     }
 
     byte[] bytes() {
@@ -275,6 +300,11 @@ public final class PcodecPayload {
 
     byte[] raw() {
       return out;
+    }
+
+    /** where byte 0 of the decoded bytes is in raw() */
+    int base() {
+      return base;
     }
   }
 
@@ -345,11 +375,12 @@ public final class PcodecPayload {
       }
     });
     byte[] dst = sink.raw();
+    int base = sink.base();
     int[] dAt = {deltasAt};
     long nx = 0;
     for (long j = 0; j < k; j++) {
       long pos = nx + Varint.get(p, dAt, end);
-      System.arraycopy(p, excAt + (int) (j * width), dst, (int) pos * width, width);
+      System.arraycopy(p, excAt + (int) (j * width), dst, base + (int) pos * width, width);
       nx = pos + 1;
     }
   }

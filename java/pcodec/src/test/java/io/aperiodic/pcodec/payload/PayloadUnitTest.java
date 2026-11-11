@@ -217,4 +217,57 @@ class PayloadUnitTest {
       assertEquals(Double.doubleToRawLongBits(c[1]), Double.doubleToRawLongBits(Decimal.round(c[0])), "round(" + c[0] + ")");
     }
   }
+
+  @Test
+  void decompressRefusesARangeOutsideThePayload() {
+    PcodecPayload c = new PcodecPayload();
+    byte[] raw = c.compress(new byte[] {1, 2, 3, 4}, 0, 4, null, 8, true);
+    assertEquals(PcodecPayload.MODE_RAW, PcodecPayload.mode(raw));
+    assertThrows(IndexOutOfBoundsException.class, () -> c.decompress(raw, 0, raw.length + 4, 8));
+    assertThrows(IndexOutOfBoundsException.class, () -> c.decompress(raw, -1, raw.length, 4));
+    assertThrows(IndexOutOfBoundsException.class, () -> c.decompress(raw, 1, raw.length, 4));
+    byte[] dst = new byte[4];
+    assertThrows(IndexOutOfBoundsException.class, () -> c.decompress(raw, 0, raw.length, dst, 1, 4));
+  }
+
+  @Test
+  void sinkNeverGrowsPastTheExpectedSize() {
+    PcodecPayload.Sink s = new PcodecPayload.Sink(new byte[100_000], 0, 100_000);
+    for (int i = 0; i < 100_000 / 8; i++) {
+      s.put(i, 8);
+    }
+    assertEquals(100_000, s.raw().length);
+    assertEquals(100_000, s.bytes().length);
+    PcodecPayload.Sink grown = new PcodecPayload.Sink(null, 0, 100_000);
+    for (int i = 0; i < 100_000 / 8; i++) {
+      grown.put(i, 8);
+    }
+    assertTrue(grown.raw().length <= 100_000, grown.raw().length + " bytes");
+    assertEquals(100_000, grown.bytes().length);
+  }
+
+  @Test
+  void decompressIntoABufferWritesOnlyItsRange() {
+    PcodecPayload c = new PcodecPayload();
+    byte[] src = new byte[8 * 3000];
+    for (int i = 0; i < 3000; i++) {
+      long bits = Double.doubleToRawLongBits(i * 0.25 + 1.5);
+      for (int b = 0; b < 8; b++) {
+        src[8 * i + b] = (byte) (bits >>> (8 * b));
+      }
+    }
+    src[8 * 17] ^= 1; // one exception for DECIMAL mode
+    for (ParquetType hint : new ParquetType[] {ParquetType.DOUBLE, ParquetType.INT64, null}) {
+      for (boolean decimal : new boolean[] {true, false}) {
+        byte[] p = c.compress(src, 0, src.length, hint, 8, decimal);
+        byte[] dst = new byte[src.length + 10];
+        Arrays.fill(dst, (byte) 0x5a);
+        c.decompress(p, 0, p.length, dst, 7, src.length);
+        assertArrayEquals(src, Arrays.copyOfRange(dst, 7, 7 + src.length), hint + " " + decimal);
+        for (int i : new int[] {0, 6, 7 + src.length, 9 + src.length}) {
+          assertEquals((byte) 0x5a, dst[i], "byte " + i + " outside the range");
+        }
+      }
+    }
+  }
 }
