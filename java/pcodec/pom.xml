@@ -40,6 +40,11 @@
     <zstd.test.version>2.0.2</zstd.test.version>
     <pitest.version>1.30.1</pitest.version>
     <pitest.junit5.version>1.2.3</pitest.junit5.version>
+    <!-- PIT's defaults; the oracle-mutants profile (make mutants-oracle) changes them -->
+    <pit.oracle>/nonexistent</pit.oracle>
+    <pit.oracle.traced>/nonexistent</pit.oracle.traced>
+    <pit.threshold>90</pit.threshold>
+    <pit.timeout>8000</pit.timeout>
   </properties>
 
   <dependencies>
@@ -141,22 +146,63 @@
           <!-- the score PIT reaches with the suites above (VERIFICATION.md, Mutation testing):
                the survivors are in heuristics' decision margins, CORE-MATH's rounding
                corrections and redundant bounds checks, which the oracle-backed suites judge -->
-          <mutationThreshold>90</mutationThreshold>
+          <mutationThreshold>${pit.threshold}</mutationThreshold>
           <timestampedReports>false</timestampedReports>
           <outputFormats>
             <format>HTML</format>
             <format>CSV</format>
           </outputFormats>
           <threads>3</threads>
-          <timeoutConstant>8000</timeoutConstant>
+          <timeoutConstant>${pit.timeout}</timeoutConstant>
           <jvmArgs>
             <value>-Xss8m</value>
             <value>-Dtparquet.testdata=${tparquet.root}/testdata</value>
             <value>-Dpcodec.vectors=${project.basedir}/vectors</value>
-            <value>-Dpcodec.oracle=/nonexistent</value>
+            <value>-Dpcodec.oracle=${pit.oracle}</value>
+            <value>-Dpcodec.oracle.traced=${pit.oracle.traced}</value>
+            <value>-Dpcodec.failfast=true</value>
           </jvmArgs>
         </configuration>
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- make mutants-oracle: the survivors of `make mutants` (listed in $PIT_ONLY_LISTED, kept by
+         verification/pit-only-listed) judged by the oracle-backed suites too -->
+    <profile>
+      <id>oracle-mutants</id>
+      <properties>
+        <pit.oracle>${project.basedir}/oracle/target/release/pcodec-oracle</pit.oracle>
+        <pit.oracle.traced>${project.basedir}/oracle-traced/target/release/pcodec-oracle-traced</pit.oracle.traced>
+        <pit.threshold>0</pit.threshold>
+        <pit.timeout>240000</pit.timeout>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-maven</artifactId>
+            <dependencies>
+              <dependency>
+                <groupId>io.aperiodic.tparquet</groupId>
+                <artifactId>pit-only-listed</artifactId>
+                <version>1</version>
+              </dependency>
+            </dependencies>
+            <configuration>
+              <targetTests combine.children="append">
+                <param>io.aperiodic.pcodec.ParityTest</param>
+                <param>io.aperiodic.pcodec.DictParityTest</param>
+                <param>io.aperiodic.pcodec.PayloadParityTest</param>
+                <param>io.aperiodic.pcodec.MathParityTest</param>
+                <param>io.aperiodic.pcodec.ParquetFilesTest</param>
+                <param>io.aperiodic.pcodec.ExhaustiveParityTest</param>
+              </targetTests>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

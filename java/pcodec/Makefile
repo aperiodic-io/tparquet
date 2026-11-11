@@ -5,7 +5,7 @@ MVN ?= mvn -B
 SCALE ?= 1
 ORACLE := oracle/target/release/pcodec-oracle
 
-.PHONY: oracle test parity vectors vectors-check proofs mutants check
+.PHONY: oracle test parity vectors vectors-check proofs mutants mutants-oracle check
 
 oracle:
 	cargo build --release --manifest-path oracle/Cargo.toml
@@ -37,8 +37,19 @@ vectors-check: vectors
 proofs:
 	python3 -u verification/proofs.py
 
-# PIT on the library (every mutant killed, or excluded with a reason in pom.xml)
+# PIT on the library, judged by the suites that need no oracle (threshold in pom.xml)
 mutants:
 	$(MVN) test-compile org.pitest:pitest-maven:mutationCoverage
+
+# the survivors of `mutants` judged again with the oracle-backed suites added (hours); the
+# survivors of both are in target/pit-reports/mutations.csv
+mutants-oracle: oracle
+	$(MVN) -q -f verification/pit-only-listed/pom.xml install
+	$(MVN) test-compile org.pitest:pitest-maven:mutationCoverage -Dpit.threshold=0
+	awk -F, '$$6=="SURVIVED"||$$6=="NO_COVERAGE"{print $$2"|"$$4"|"$$5"|"$$3}' \
+	  target/pit-reports/mutations.csv | sort -u > target/pit-survivors.txt
+	cp target/pit-reports/mutations.csv target/pit-mutations-oracle-free.csv
+	PIT_ONLY_LISTED=$(CURDIR)/target/pit-survivors.txt \
+	  $(MVN) -P oracle-mutants test-compile org.pitest:pitest-maven:mutationCoverage
 
 check: parity vectors-check proofs
