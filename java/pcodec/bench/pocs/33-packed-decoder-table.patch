@@ -1,0 +1,62 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
+index 8c5b13d..8dbd7d4 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
+@@ -109,6 +109,11 @@ final class Ans {
+     final int[] nextStateIdxBase;
+     final int[] bitsToRead;
+     final int[] offsetBits;
++    /**
++     * the three tables in one: the next state base in bits 0 to 15, the bits to read in 16 to 23,
++     * the offset bits in 24 to 31
++     */
++    final int[] packed;
+ 
+     Decoder(Spec spec, int[] binOffsetBits) {
+       int tableSize = spec.tableSize();
+@@ -116,6 +121,7 @@ final class Ans {
+       nextStateIdxBase = new int[n];
+       bitsToRead = new int[n];
+       offsetBits = new int[n];
++      packed = new int[n];
+       int[] symbolXs = spec.symbolWeights.clone();
+       for (int i = 0; i < n; i++) {
+         int symbol = spec.stateSymbols[i];
+@@ -126,6 +132,7 @@ final class Ans {
+         nextStateIdxBase[i] = (nextStateBase - tableSize) & 0xffff;
+         bitsToRead[i] = btr & 0xff;
+         offsetBits[i] = (symbol < binOffsetBits.length ? binOffsetBits[symbol] : 0) & 0xff;
++        packed[i] = nextStateIdxBase[i] | (bitsToRead[i] << 16) | (offsetBits[i] << 24);
+         symbolXs[symbol]++;
+       }
+     }
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
+index ace201f..62fc0b6 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
+@@ -72,20 +72,22 @@ final class ChunkDecompressor {
+         return;
+       }
+       if (nBins > 1) {
++        int[] table = decoder.packed;
+         long bitIdx = r.bitIdx;
+         int offsetBitIdx = 0;
+         for (int i = 0; i < batchN; i++) {
+           int j = i % ChunkMeta.ANS_INTERLEAVING;
+           int stateIdx = ansStateIdxs[j];
+-          int btr = decoder.bitsToRead[stateIdx];
++          int entry = table[stateIdx];
++          int btr = (entry >>> 16) & 0xff;
+           int ansVal = (int) r.peekAt(bitIdx, btr);
+           offsetBitsCsum[i] = offsetBitIdx;
+-          int ob = decoder.offsetBits[stateIdx];
++          int ob = entry >>> 24;
+           offsetBits[i] = ob;
+           latents[i] = stateLowers[stateIdx];
+           bitIdx += btr;
+           offsetBitIdx += ob;
+-          ansStateIdxs[j] = decoder.nextStateIdxBase[stateIdx] + ansVal;
++          ansStateIdxs[j] = (entry & 0xffff) + ansVal;
+         }
+         r.bitIdx = bitIdx;
+       } else {

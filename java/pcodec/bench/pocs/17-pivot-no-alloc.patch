@@ -1,0 +1,61 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
+index 6ef9382..cfeceaa 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
+@@ -7,32 +7,37 @@ final class SortUtils {
+   /** {@code choose_pivot} */
+   static long choosePivot(long[] v, int from, int to) {
+     int len = to - from;
+-    int[] abc = {len / 4, len / 2, (len * 3) / 4};
++    int a = len / 4;
++    int b = len / 2;
++    int c = (len * 3) / 4;
+     if (len >= 8) {
+       if (len >= 50) {
+-        for (int k = 0; k < 3; k++) {
+-          int[] t = {abc[k] - 1, abc[k], abc[k] + 1};
+-          sort3(v, from, t, 0, 1, 2);
+-          abc[k] = t[1];
+-        }
++        a = median3(v, from, a - 1, a, a + 1);
++        b = median3(v, from, b - 1, b, b + 1);
++        c = median3(v, from, c - 1, c, c + 1);
+       }
+-      sort3(v, from, abc, 0, 1, 2);
++      b = median3(v, from, a, b, c);
+     }
+-    return v[from + abc[1]];
++    return v[from + b];
+   }
+ 
+-  private static void sort2(long[] v, int from, int[] idx, int a, int b) {
+-    if (Latent.lt(v[from + idx[b]], v[from + idx[a]])) {
+-      int t = idx[a];
+-      idx[a] = idx[b];
+-      idx[b] = t;
++  /**
++   * The index left in the middle by the reference's {@code sort3} of three indices (the same
++   * compares and swaps, on locals instead of an allocated {@code int[]} per call).
++   */
++  private static int median3(long[] v, int from, int a, int b, int c) {
++    if (Latent.lt(v[from + b], v[from + a])) {
++      int t = a;
++      a = b;
++      b = t;
+     }
+-  }
+-
+-  private static void sort3(long[] v, int from, int[] idx, int a, int b, int c) {
+-    sort2(v, from, idx, a, b);
+-    sort2(v, from, idx, b, c);
+-    sort2(v, from, idx, a, b);
++    if (Latent.lt(v[from + c], v[from + b])) {
++      b = c;
++    }
++    if (Latent.lt(v[from + b], v[from + a])) {
++      b = a;
++    }
++    return b;
+   }
+ 
+   /** {@code break_patterns} (64-bit usize) */

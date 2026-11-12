@@ -1,0 +1,129 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..f79861e 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -318,17 +318,20 @@ final class ChunkCompressor {
+     return new Candidate(new ChunkCompressor(meta, clcs, enc.pageInfos), binCounts);
+   }
+ 
+-  private static float calculateCompressedSampleSize(
++  private static Candidate sampleCandidate(
+       Latent lt, long[] sample, int unoptimizedBinsLog, DeltaEncoding delta) {
+-    Candidate c =
+-        newCandidate(
+-            lt,
+-            sample.clone(),
+-            null,
+-            PagingSpec.exact(sample.length),
+-            Mode.CLASSIC,
+-            delta,
+-            unoptimizedBinsLog);
++    return newCandidate(
++        lt,
++        sample.clone(),
++        null,
++        PagingSpec.exact(sample.length),
++        Mode.CLASSIC,
++        delta,
++        unoptimizedBinsLog);
++  }
++
++  /** {@code calculate_compressed_sample_size}, of a candidate built by {@link #sampleCandidate} */
++  private static float compressedSampleSize(Candidate c) {
+     long size = c.cc.meta.maxSize() + c.cc.pageSizeHintInner(0);
+     return RustMath.u64ToF32(size);
+   }
+@@ -355,35 +358,48 @@ final class ChunkCompressor {
+     return sample;
+   }
+ 
++  /**
++   * {@code choose_auto_delta_encoding}. When the sample is all of {@code primary}, it also puts the
++   * winning sample candidate in {@code wholeSample[0]}: compressing the chunk classically on one
++   * page with the chosen encoding would build that very candidate again.
++   */
+   private static DeltaEncoding chooseAutoDeltaEncoding(
+-      Latent lt, long[] primary, int unoptimizedBinsLog) {
++      Latent lt, long[] primary, int unoptimizedBinsLog, Candidate[] wholeSample) {
+     long[] sample = chooseDeltaSample(primary);
+     if (sample == null) {
+       return DeltaEncoding.NO_OP;
+     }
+     int sampleN = sample.length;
+     DeltaEncoding best = DeltaEncoding.NO_OP;
+-    float bestCost = calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, DeltaEncoding.NO_OP);
++    Candidate bestC = sampleCandidate(lt, sample, unoptimizedBinsLog, DeltaEncoding.NO_OP);
++    float bestCost = compressedSampleSize(bestC);
+     float lookbackPenalty = LOOKBACK_REQUIRED_BYTE_SAVINGS_PER_N * RustMath.u64ToF32(sampleN);
+     if (bestCost > lookbackPenalty) {
+-      float cost =
+-          calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, Delta.newLookback(sampleN))
+-              + lookbackPenalty;
++      Candidate c = sampleCandidate(lt, sample, unoptimizedBinsLog, Delta.newLookback(sampleN));
++      float cost = compressedSampleSize(c) + lookbackPenalty;
+       if (cost < bestCost) {
+         best = Delta.newLookback(primary.length);
++        bestC = c;
+         bestCost = cost;
+       }
+     }
+     for (int order = 1; order <= DeltaEncoding.MAX_CONSECUTIVE_ORDER; order++) {
+       DeltaEncoding enc = DeltaEncoding.consecutive(order, false);
+-      float cost = calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, enc);
++      Candidate c = sampleCandidate(lt, sample, unoptimizedBinsLog, enc);
++      float cost = compressedSampleSize(c);
+       if (cost < bestCost) {
+         best = enc;
++        bestC = c;
+         bestCost = cost;
+       } else {
+         break;
+       }
+     }
++    // chooseDeltaSample takes contiguous groups from the start, so a sample as long as primary
++    // is primary (and its lookback encoding, newLookback(sampleN), is best's)
++    if (sampleN == primary.length) {
++      wholeSample[0] = bestC;
++    }
+     return best;
+   }
+ 
+@@ -398,11 +414,11 @@ final class ChunkCompressor {
+   }
+ 
+   private static DeltaEncoding chooseDeltaEncoding(
+-      Latent lt, long[] primary, ChunkConfig config, int ubl) {
++      Latent lt, long[] primary, ChunkConfig config, int ubl, Candidate[] wholeSample) {
+     DeltaSpec spec = config.deltaSpec;
+     switch (spec.kind) {
+       case AUTO:
+-        return chooseAutoDeltaEncoding(lt, primary, ubl);
++        return chooseAutoDeltaEncoding(lt, primary, ubl, wholeSample);
+       case NO_OP:
+         return DeltaEncoding.NO_OP;
+       case TRY_CONSECUTIVE:
+@@ -492,9 +508,21 @@ final class ChunkCompressor {
+     }
+     Modes.Split split = bid.split.split(nums);
+     int ubl = chooseUnoptimizedBinsLog(config.compressionLevel, n);
+-    DeltaEncoding delta = chooseDeltaEncoding(bid.mode.primaryLatentType(lt), split.primary, config, ubl);
+-    Candidate c =
+-        newCandidate(lt, split.primary, split.secondary, config.pagingSpec, bid.mode, delta, ubl);
++    Candidate[] wholeSample = new Candidate[1];
++    DeltaEncoding delta =
++        chooseDeltaEncoding(bid.mode.primaryLatentType(lt), split.primary, config, ubl, wholeSample);
++    Candidate c;
++    long[] nPerPage = config.pagingSpec.nPerPage(n);
++    if (wholeSample[0] != null
++        && bid.mode == Mode.CLASSIC
++        && split.secondary == null
++        && nPerPage.length == 1) {
++      // the delta search already built this candidate: the same latents, classic, on one page,
++      // with the chosen encoding
++      c = wholeSample[0];
++    } else {
++      c = newCandidate(lt, split.primary, split.secondary, config.pagingSpec, bid.mode, delta, ubl);
++    }
+     if (c.cc.shouldFallback(lt, n, c.binCounts)) {
+       return fallback(t, nums, config);
+     }

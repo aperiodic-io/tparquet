@@ -1,0 +1,63 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java
+index deb1e5f..aa21835 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java
+@@ -64,6 +64,9 @@ final class FloatMult {
+ 
+   /** {@code approx_pair_gcd}; -1 for none (a float's bits are never -1 as a long) */
+   static long approxPairGcd(FloatType f, long greater, long lesser) {
++    if (f == FloatType.F64) {
++      return approxPairGcdF64(greater, lesser);
++    }
+     if (isApproxZero(f, lesser, greater) || f.eq(lesser, greater)) {
+       return -1;
+     }
+@@ -93,6 +96,48 @@ final class FloatMult {
+     }
+   }
+ 
++  /**
++   * {@link #approxPairGcd} for f64 on doubles. A NaN never reaches a return (the loop does not
++   * end on one, as the generic version's does not), so the NaN payloads of FloatType's
++   * arithmetic need no emulating here.
++   */
++  private static long approxPairGcdF64(long greaterBits, long lesserBits) {
++    double greater = Double.longBitsToDouble(greaterBits);
++    double lesser = Double.longBitsToDouble(lesserBits);
++    // insignificantFloatTo: 52 - REQUIRED_PRECISION_BITS spare bits
++    double insignificant = 0x1p-46;
++    if (lesser <= greater * insignificant || lesser == greater) {
++      return -1;
++    }
++    double machineEps = 0x1p-52;
++    double gv = greater;
++    double ge = 0.0;
++    double lv = lesser;
++    double le = 0.0;
++    while (true) {
++      double prev = gv;
++      double ratio = RustMath.roundF64(gv / lv);
++      ge = ge + (ratio * le + gv * machineEps);
++      gv = absF64(gv - ratio * lv);
++      if (gv <= prev * 0x1p-16 || gv <= ge) {
++        return Double.doubleToRawLongBits(lv);
++      }
++      if (gv <= greater * insignificant || gv <= ge * 0x1p6) {
++        return -1;
++      }
++      double tv = gv;
++      double te = ge;
++      gv = lv;
++      ge = le;
++      lv = tv;
++      le = te;
++    }
++  }
++
++  private static double absF64(double x) {
++    return Double.longBitsToDouble(Double.doubleToRawLongBits(x) & 0x7fffffffffffffffL);
++  }
++
+   static Config chooseConfigByTrailingZeros(NumberType t, FloatType f, long[] sample) {
+     int precisionBits = f.precisionBits;
+     long k = Integer.MAX_VALUE;

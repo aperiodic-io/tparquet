@@ -345,3 +345,11 @@ def test_read_parquet_keyword_arguments(tmp_path: pathlib.Path) -> None:
     assert ppd.read_parquet(path, columns=["s"]).columns.tolist() == ["s"]
     with pytest.raises(TypeError):
         ppd.read_parquet(path, not_an_argument=True)
+
+
+def test_to_parquet_passes_the_policy() -> None:
+    # a column the auto policy gives to PCODEC, so that only the policy passed changes the codec
+    df = pd.DataFrame({"z": [1_700_000_000_000 + 1000 * i for i in range(2000)]})
+    assert ppd.to_parquet(df, io.BytesIO()) == {"z": "PCODEC"}
+    assert ppd.to_parquet(df, io.BytesIO(), policy="auto") == {"z": "PCODEC"}
+    assert ppd.to_parquet(df, io.BytesIO(), policy="base") == {"z": "ZSTD"}

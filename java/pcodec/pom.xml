@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- pcodec-java: a pure Java implementation of pcodec 1.0.4 (standalone format), byte for byte
+     the output of the Rust reference, and the PCODEC page payload of spec/FORMAT.md.
+     No dependencies at run time; see README.md and VERIFICATION.md. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.aperiodic.tparquet</groupId>
+  <artifactId>pcodec-java</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+  <name>pcodec-java</name>
+  <description>Pure Java pcodec (pco 1.0.4 standalone format) and the PCODEC Parquet page payload</description>
+  <url>https://github.com/aperiodic-io/tparquet</url>
+
+  <licenses>
+    <license>
+      <name>Apache License 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- parquet-java 1.17 targets Java 11, so the library and its tests do too -->
+    <maven.compiler.release>11</maven.compiler.release>
+    <maven.compiler.testRelease>11</maven.compiler.testRelease>
+    <!-- the repository root: testdata/ -->
+    <tparquet.root>${project.basedir}/../..</tparquet.root>
+    <!-- the Rust reference oracle (oracle/), built by `make -C java/pcodec oracle`; parity tests
+         that need it are skipped when it is absent, unless pcodec.oracle.required is true -->
+    <pcodec.oracle>${project.basedir}/oracle/target/release/pcodec-oracle</pcodec.oracle>
+    <pcodec.oracle.traced>${project.basedir}/oracle-traced/target/release/pcodec-oracle-traced</pcodec.oracle.traced>
+    <pcodec.oracle.required>false</pcodec.oracle.required>
+    <!-- scale of the randomized parity suites (cases per property) -->
+    <pcodec.parity.scale>1</pcodec.parity.scale>
+    <junit.version>5.14.4</junit.version>
+    <zstd.test.version>2.0.2</zstd.test.version>
+    <pitest.version>1.30.1</pitest.version>
+    <pitest.junit5.version>1.2.3</pitest.junit5.version>
+    <!-- PIT's defaults; the oracle-mutants profile (make mutants-oracle) changes them -->
+    <pit.oracle>/nonexistent</pit.oracle>
+    <pit.oracle.traced>/nonexistent</pit.oracle.traced>
+    <pit.threshold>91</pit.threshold>
+    <pit.timeout>8000</pit.timeout>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- a pure Java Zstandard decoder for the ZSTD-mode conformance vectors (test only; the
+         library takes a ZSTD decoder as a plug-in, ZstdCodec) -->
+    <dependency>
+      <groupId>io.airlift</groupId>
+      <artifactId>aircompressor</artifactId>
+      <version>${zstd.test.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.14.0</version>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:all</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.4</version>
+        <configuration>
+          <argLine>-Xss8m -Xmx3g</argLine>
+          <systemPropertyVariables>
+            <tparquet.testdata>${tparquet.root}/testdata</tparquet.testdata>
+            <pcodec.vectors>${project.basedir}/vectors</pcodec.vectors>
+            <pcodec.oracle>${pcodec.oracle}</pcodec.oracle>
+            <pcodec.oracle.traced>${pcodec.oracle.traced}</pcodec.oracle.traced>
+            <pcodec.oracle.required>${pcodec.oracle.required}</pcodec.oracle.required>
+            <pcodec.parity.scale>${pcodec.parity.scale}</pcodec.parity.scale>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifestEntries>
+              <Automatic-Module-Name>io.aperiodic.pcodec</Automatic-Module-Name>
+            </manifestEntries>
+          </archive>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.pitest</groupId>
+        <artifactId>pitest-maven</artifactId>
+        <version>${pitest.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-junit5-plugin</artifactId>
+            <version>${pitest.junit5.version}</version>
+          </dependency>
+        </dependencies>
+        <configuration>
+          <targetClasses>
+            <param>io.aperiodic.pcodec.*</param>
+          </targetClasses>
+          <!-- the suites that judge mutants: the golden vectors (the reference's answers), the
+               shared payload vectors, the unit tests and the round trips; the oracle-backed
+               suites cover the same ground at a cost per mutant PIT cannot afford -->
+          <targetTests>
+            <param>io.aperiodic.pcodec.VectorsTest</param>
+            <param>io.aperiodic.pcodec.PayloadVectorsTest</param>
+            <param>io.aperiodic.pcodec.AnsTest</param>
+            <param>io.aperiodic.pcodec.HistogramTest</param>
+            <param>io.aperiodic.pcodec.BinOptimizationTest</param>
+            <param>io.aperiodic.pcodec.ModesTest</param>
+            <param>io.aperiodic.pcodec.DeltaTest</param>
+            <param>io.aperiodic.pcodec.RoundTripTest</param>
+            <param>io.aperiodic.pcodec.MathVectorsTest</param>
+            <param>io.aperiodic.pcodec.ApiTest</param>
+            <param>io.aperiodic.pcodec.RustMathTest</param>
+            <param>io.aperiodic.pcodec.payload.PayloadUnitTest</param>
+            <!-- and the checks of Modes.Margins, the order-independence checker -->
+            <param>io.aperiodic.pcodec.OrderIndependenceTest</param>
+            <param>io.aperiodic.pcodec.BitIoTest</param>
+            <param>io.aperiodic.pcodec.InvariantsTest</param>
+          </targetTests>
+          <!-- hashCode: Mode's is only required to agree with equals, which any constant does -->
+          <excludedMethods>
+            <param>hashCode</param>
+          </excludedMethods>
+          <!-- below the score PIT reaches with the suites above (92%); `make mutants-oracle`
+               judges the survivors with the oracle-backed suites too (VERIFICATION.md) -->
+          <mutationThreshold>${pit.threshold}</mutationThreshold>
+          <timestampedReports>false</timestampedReports>
+          <outputFormats>
+            <format>HTML</format>
+            <format>CSV</format>
+          </outputFormats>
+          <threads>3</threads>
+          <timeoutConstant>${pit.timeout}</timeoutConstant>
+          <jvmArgs>
+            <value>-Xss8m</value>
+            <value>-Dtparquet.testdata=${tparquet.root}/testdata</value>
+            <value>-Dpcodec.vectors=${project.basedir}/vectors</value>
+            <value>-Dpcodec.oracle=${pit.oracle}</value>
+            <value>-Dpcodec.oracle.traced=${pit.oracle.traced}</value>
+            <value>-Dpcodec.failfast=true</value>
+          </jvmArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!-- make mutants-oracle: the survivors of `make mutants` (listed in $PIT_ONLY_LISTED, kept by
+         verification/pit-only-listed) judged by the oracle-backed suites too -->
+    <profile>
+      <id>oracle-mutants</id>
+      <properties>
+        <pit.oracle>${project.basedir}/oracle/target/release/pcodec-oracle</pit.oracle>
+        <pit.oracle.traced>${project.basedir}/oracle-traced/target/release/pcodec-oracle-traced</pit.oracle.traced>
+        <pit.threshold>0</pit.threshold>
+        <pit.timeout>240000</pit.timeout>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-maven</artifactId>
+            <dependencies>
+              <dependency>
+                <groupId>io.aperiodic.tparquet</groupId>
+                <artifactId>pit-only-listed</artifactId>
+                <version>1</version>
+              </dependency>
+            </dependencies>
+            <configuration>
+              <targetTests combine.children="append">
+                <param>io.aperiodic.pcodec.ParityTest</param>
+                <param>io.aperiodic.pcodec.DictParityTest</param>
+                <param>io.aperiodic.pcodec.PayloadParityTest</param>
+                <param>io.aperiodic.pcodec.MathParityTest</param>
+                <param>io.aperiodic.pcodec.ParquetFilesTest</param>
+                <param>io.aperiodic.pcodec.ExhaustiveParityTest</param>
+              </targetTests>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

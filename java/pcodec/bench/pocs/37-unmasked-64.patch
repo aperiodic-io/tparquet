@@ -1,0 +1,36 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Latent.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Latent.java
+index 9d03b7e..cd5deed 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Latent.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Latent.java
+@@ -5,12 +5,29 @@ package io.aperiodic.pcodec;
+  * zero-extended: every operation here wraps at the latent's width, as Rust's {@code wrapping_*}
+  * methods on the unsigned type do.
+  */
+-final class Latent {
++class Latent {
+   static final Latent U8 = new Latent(0, 8, 16);
+   static final Latent U16 = new Latent(1, 16, 32);
+   static final Latent U32 = new Latent(2, 32, 64);
+   // 64-bit convolutions are refused (as in the reference); its Conv type is nominally i64
+-  static final Latent U64 = new Latent(3, 64, 64);
++  static final Latent U64 = new Latent64();
++
++  /** u64: the mask is all ones, so addition and subtraction wrap without it */
++  private static final class Latent64 extends Latent {
++    Latent64() {
++      super(3, 64, 64);
++    }
++
++    @Override
++    long add(long a, long b) {
++      return a + b;
++    }
++
++    @Override
++    long sub(long a, long b) {
++      return a - b;
++    }
++  }
+ 
+   /** 0..3 for u8, u16, u32, u64 */
+   final int id;

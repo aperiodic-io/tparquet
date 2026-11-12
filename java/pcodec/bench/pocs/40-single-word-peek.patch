@@ -1,0 +1,14 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java
+index f57b9a4..0932a9c 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java
+@@ -44,7 +44,8 @@ final class BitReader {
+     long byteIdx = at >>> 3;
+     int off = (int) (at & 7);
+     long v = u64At(byteIdx) >>> off;
+-    if (n > 64 - off - 0 && off > 0) {
++    // the second word only when the value does not fit in the first (never at offset 0: n <= 64)
++    if (n + off > 64) {
+       v |= u64At(byteIdx + 8) << (64 - off);
+     }
+     return n == 64 ? v : v & ((1L << n) - 1);

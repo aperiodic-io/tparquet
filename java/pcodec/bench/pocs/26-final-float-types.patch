@@ -1,0 +1,377 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatType.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatType.java
+index f209689..0604d35 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatType.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatType.java
+@@ -242,182 +242,197 @@ abstract class FloatType {
+ 
+   // ------------------------------------------------------------ instances
+ 
+-  static final FloatType F64 =
+-      new FloatType(
++  static final F64Type F64 = new F64Type();
++
++  static final class F64Type extends FloatType {
++    private F64Type() {
++      super(
+           64, 52, 1023, Latent.U64, 0x8000000000000000L, 0x7fffffffffffffffL,
+-          0x7ff0000000000000L, 0x0008000000000000L, 0xfff8000000000000L) {
+-        @Override
+-        double value(long x) {
+-          return Double.longBitsToDouble(x);
+-        }
+-
+-        @Override
+-        long rawOp(int op, long a, long b) {
+-          double x = Double.longBitsToDouble(a);
+-          double y = Double.longBitsToDouble(b);
+-          double r;
+-          switch (op) {
+-            case ADD:
+-              r = x + y;
+-              break;
+-            case SUB:
+-              r = x - y;
+-              break;
+-            case MUL:
+-              r = x * y;
+-              break;
+-            default:
+-              r = x / y;
+-              break;
+-          }
+-          return Double.isNaN(r) ? defaultNan : Double.doubleToRawLongBits(r);
+-        }
+-
+-        @Override
+-        long one() {
+-          return Double.doubleToRawLongBits(1.0);
+-        }
+-
+-        @Override
+-        long round(long x) {
+-          if (isNan(x)) {
+-            return quiet(x);
+-          }
+-          return Double.doubleToRawLongBits(RustMath.roundF64(Double.longBitsToDouble(x)));
+-        }
+-
+-        @Override
+-        long fromF64(double x) {
+-          return Double.doubleToRawLongBits(x);
+-        }
+-
+-        @Override
+-        double toF64(long x) {
+-          return Double.longBitsToDouble(x);
+-        }
+-
+-        @Override
+-        long fromLatentNumerical(long l) {
+-          return Double.doubleToRawLongBits(Latent.toF64(l));
+-        }
+-
+-        @Override
+-        long toUnsignedSaturating(long a) {
+-          return RustMath.f64ToUnsigned(Double.longBitsToDouble(a), 64);
+-        }
+-      };
+-
+-  static final FloatType F32 =
+-      new FloatType(32, 23, 127, Latent.U32, 0x80000000L, 0x7fffffffL, 0x7f800000L, 0x00400000L, 0xffc00000L) {
+-        @Override
+-        double value(long x) {
+-          return Float.intBitsToFloat((int) x);
+-        }
+-
+-        @Override
+-        long rawOp(int op, long a, long b) {
+-          float x = Float.intBitsToFloat((int) a);
+-          float y = Float.intBitsToFloat((int) b);
+-          float r;
+-          switch (op) {
+-            case ADD:
+-              r = x + y;
+-              break;
+-            case SUB:
+-              r = x - y;
+-              break;
+-            case MUL:
+-              r = x * y;
+-              break;
+-            default:
+-              r = x / y;
+-              break;
+-          }
+-          return Float.isNaN(r) ? defaultNan : Float.floatToRawIntBits(r) & 0xffffffffL;
+-        }
+-
+-        @Override
+-        long one() {
+-          return Float.floatToRawIntBits(1.0f) & 0xffffffffL;
+-        }
+-
+-        @Override
+-        long round(long x) {
+-          if (isNan(x)) {
+-            return quiet(x);
+-          }
+-          return Float.floatToRawIntBits(RustMath.roundF32(Float.intBitsToFloat((int) x)))
+-              & 0xffffffffL;
+-        }
+-
+-        @Override
+-        long fromF64(double x) {
+-          return f64ToF32Bits(x);
+-        }
+-
+-        @Override
+-        double toF64(long x) {
+-          return f32BitsToF64(x);
+-        }
+-
+-        @Override
+-        long fromLatentNumerical(long l) {
+-          return Float.floatToRawIntBits(RustMath.u64ToF32(l)) & 0xffffffffL;
+-        }
+-
+-        @Override
+-        long toUnsignedSaturating(long a) {
+-          return RustMath.f64ToUnsigned(Float.intBitsToFloat((int) a), 32);
+-        }
+-      };
+-
+-  static final FloatType F16 =
+-      new FloatType(16, 10, 15, Latent.U16, 0x8000L, 0x7fffL, 0x7c00L, 0x0200L, 0xfe00L) {
+-        @Override
+-        double value(long x) {
+-          return f16ToF32((int) x);
+-        }
+-
+-        @Override
+-        long rawOp(int op, long a, long b) {
+-          long fa = f16BitsToF32Bits(a);
+-          long fb = f16BitsToF32Bits(b);
+-          return f32BitsToF16Bits(F32.rawOp(op, fa, fb));
+-        }
+-
+-        @Override
+-        long one() {
+-          return 0x3C00;
+-        }
+-
+-        @Override
+-        long round(long x) {
+-          if (isNan(x)) {
+-            return quiet(x);
+-          }
+-          return f32BitsToF16Bits(F32.round(f16BitsToF32Bits(x)));
+-        }
+-
+-        @Override
+-        long fromF64(double x) {
+-          return f32BitsToF16Bits(f64ToF32Bits(x));
+-        }
+-
+-        @Override
+-        double toF64(long x) {
+-          return f32BitsToF64(f16BitsToF32Bits(x));
+-        }
+-
+-        @Override
+-        long fromLatentNumerical(long l) {
+-          return f32BitsToF16Bits(Float.floatToRawIntBits(RustMath.u64ToF32(l)) & 0xffffffffL);
+-        }
+-
+-        @Override
+-        long toUnsignedSaturating(long a) {
+-          return RustMath.f64ToUnsigned(f16ToF32((int) a), 16);
+-        }
+-      };
++          0x7ff0000000000000L, 0x0008000000000000L, 0xfff8000000000000L);
++    }
++
++    @Override
++    double value(long x) {
++      return Double.longBitsToDouble(x);
++    }
++
++    @Override
++    long rawOp(int op, long a, long b) {
++      double x = Double.longBitsToDouble(a);
++      double y = Double.longBitsToDouble(b);
++      double r;
++      switch (op) {
++        case ADD:
++          r = x + y;
++          break;
++        case SUB:
++          r = x - y;
++          break;
++        case MUL:
++          r = x * y;
++          break;
++        default:
++          r = x / y;
++          break;
++      }
++      return Double.isNaN(r) ? defaultNan : Double.doubleToRawLongBits(r);
++    }
++
++    @Override
++    long one() {
++      return Double.doubleToRawLongBits(1.0);
++    }
++
++    @Override
++    long round(long x) {
++      if (isNan(x)) {
++        return quiet(x);
++      }
++      return Double.doubleToRawLongBits(RustMath.roundF64(Double.longBitsToDouble(x)));
++    }
++
++    @Override
++    long fromF64(double x) {
++      return Double.doubleToRawLongBits(x);
++    }
++
++    @Override
++    double toF64(long x) {
++      return Double.longBitsToDouble(x);
++    }
++
++    @Override
++    long fromLatentNumerical(long l) {
++      return Double.doubleToRawLongBits(Latent.toF64(l));
++    }
++
++    @Override
++    long toUnsignedSaturating(long a) {
++      return RustMath.f64ToUnsigned(Double.longBitsToDouble(a), 64);
++    }
++  }
++
++  static final F32Type F32 = new F32Type();
++
++  static final class F32Type extends FloatType {
++    private F32Type() {
++      super(32, 23, 127, Latent.U32, 0x80000000L, 0x7fffffffL, 0x7f800000L, 0x00400000L, 0xffc00000L);
++    }
++
++    @Override
++    double value(long x) {
++      return Float.intBitsToFloat((int) x);
++    }
++
++    @Override
++    long rawOp(int op, long a, long b) {
++      float x = Float.intBitsToFloat((int) a);
++      float y = Float.intBitsToFloat((int) b);
++      float r;
++      switch (op) {
++        case ADD:
++          r = x + y;
++          break;
++        case SUB:
++          r = x - y;
++          break;
++        case MUL:
++          r = x * y;
++          break;
++        default:
++          r = x / y;
++          break;
++      }
++      return Float.isNaN(r) ? defaultNan : Float.floatToRawIntBits(r) & 0xffffffffL;
++    }
++
++    @Override
++    long one() {
++      return Float.floatToRawIntBits(1.0f) & 0xffffffffL;
++    }
++
++    @Override
++    long round(long x) {
++      if (isNan(x)) {
++        return quiet(x);
++      }
++      return Float.floatToRawIntBits(RustMath.roundF32(Float.intBitsToFloat((int) x)))
++          & 0xffffffffL;
++    }
++
++    @Override
++    long fromF64(double x) {
++      return f64ToF32Bits(x);
++    }
++
++    @Override
++    double toF64(long x) {
++      return f32BitsToF64(x);
++    }
++
++    @Override
++    long fromLatentNumerical(long l) {
++      return Float.floatToRawIntBits(RustMath.u64ToF32(l)) & 0xffffffffL;
++    }
++
++    @Override
++    long toUnsignedSaturating(long a) {
++      return RustMath.f64ToUnsigned(Float.intBitsToFloat((int) a), 32);
++    }
++  }
++
++  static final F16Type F16 = new F16Type();
++
++  static final class F16Type extends FloatType {
++    private F16Type() {
++      super(16, 10, 15, Latent.U16, 0x8000L, 0x7fffL, 0x7c00L, 0x0200L, 0xfe00L);
++    }
++
++    @Override
++    double value(long x) {
++      return f16ToF32((int) x);
++    }
++
++    @Override
++    long rawOp(int op, long a, long b) {
++      long fa = f16BitsToF32Bits(a);
++      long fb = f16BitsToF32Bits(b);
++      return f32BitsToF16Bits(F32.rawOp(op, fa, fb));
++    }
++
++    @Override
++    long one() {
++      return 0x3C00;
++    }
++
++    @Override
++    long round(long x) {
++      if (isNan(x)) {
++        return quiet(x);
++      }
++      return f32BitsToF16Bits(F32.round(f16BitsToF32Bits(x)));
++    }
++
++    @Override
++    long fromF64(double x) {
++      return f32BitsToF16Bits(f64ToF32Bits(x));
++    }
++
++    @Override
++    double toF64(long x) {
++      return f32BitsToF64(f16BitsToF32Bits(x));
++    }
++
++    @Override
++    long fromLatentNumerical(long l) {
++      return f32BitsToF16Bits(Float.floatToRawIntBits(RustMath.u64ToF32(l)) & 0xffffffffL);
++    }
++
++    @Override
++    long toUnsignedSaturating(long a) {
++      return RustMath.f64ToUnsigned(f16ToF32((int) a), 16);
++    }
++  }
+ 
+   // ------------------------------------------------------------ conversions (x86 semantics)
+ 
