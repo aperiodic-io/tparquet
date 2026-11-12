@@ -65,6 +65,15 @@ PLANKS = [(1, 5), (7, 3), (11, 2), (14, 1)]
 PLANK_ROWS = range(1, 15)
 PLANK_SHADES = [1.0, 0.72, 0.48]  # on the quiet ramp; the fourth plank is the signal
 
+# The Aperiodic mark as aperiodic.io draws it (its Logo component): circles (cx, cy, r) in a
+# 100 x 100 box. Drawn from these coordinates, never redrawn.
+APERIODIC = [
+    (50, 50, 7), (50, 34, 4.5), (65.2031, 45.1016, 4.5), (59.3984, 62.8984, 4.5),
+    (40.6016, 62.8984, 4.5), (34.7969, 45.1016, 4.5), (50, 16, 2), (70, 22.5, 2),
+    (82.2969, 39.5, 2), (82.2969, 60.5, 2), (70, 77.5, 2), (50, 84, 2), (30, 77.5, 2),
+    (17.7031, 60.5, 2), (17.7031, 39.5, 2), (30, 22.5, 2),
+]  # fmt: skip
+
 
 # ---- colours ----------------------------------------------------------------------------------
 def _rgb(h):
@@ -164,6 +173,13 @@ class Svg:
         )
         self.add(f'<rect y="{y0}" width="{self.w}" height="{y1 - y0}" fill="url(#{gid})"/>')
 
+    def hshade(self, p, stops):
+        """The page colour over the field, left to right: (offset 0 to 1, opacity) stops."""
+        gid = f"shade{len(self.defs)}"
+        rows = "".join(f'<stop offset="{o}" stop-color="{p["paper"]}" stop-opacity="{a}"/>' for o, a in stops)
+        self.defs.append(f'<linearGradient id="{gid}" x1="0" y1="0" x2="1" y2="0">{rows}</linearGradient>')
+        self.add(f'<rect width="{self.w}" height="{self.h}" fill="url(#{gid})"/>')
+
     def tiles(self, cells, color, ox=0, oy=0):
         """Tiles at cells (i, j), in one path."""
         d = "".join(f"M{ox + i * CELL + 1} {oy + j * CELL + 1}h3v3h-3z" for i, j in cells)
@@ -176,6 +192,14 @@ class Svg:
     def rect(self, x, y, w, h, color, opacity=1):
         o = "" if opacity == 1 else f' fill-opacity="{opacity}"'
         self.add(f'<rect x="{_num(x)}" y="{_num(y)}" width="{_num(w)}" height="{_num(h)}" fill="{color}"{o}/>')
+
+    def aperiodic(self, x, y, size, color):
+        """The Aperiodic mark, `size` units square, its box's top left at (x, y)."""
+        k = size / 100
+        dots = "".join(
+            f'<circle cx="{_num(x + cx * k)}" cy="{_num(y + cy * k)}" r="{_num(r * k)}"/>' for cx, cy, r in APERIODIC
+        )
+        self.add(f'<g fill="{color}">{dots}</g>')
 
     def save(self, name):
         defs = f"<defs>{''.join(self.defs)}</defs>" if self.defs else ""
@@ -353,6 +377,30 @@ def social(f, name):
     svg.save(name)
 
 
+# ---- the banner under Contributing -----------------------------------------------------------
+def banner(f, p, name):
+    """Who builds tparquet, in one line: Aperiodic's mark on its field, what it does, and its
+    address."""
+    w, h, m = 800, 112, 32
+    svg = Svg(w, h, "Built at Aperiodic: crypto market data, as Parquet. aperiodic.io")
+    svg.field(p)
+    svg.hshade(p, [(0, 0.9), (0.45, 0.9), (1, 0.3)])
+    svg.rect(m, 28, 12, 12, p["signal"])
+    svg.text(f.mono, "BINANCE · OKX · HYPERLIQUID", 11, m + 22, 39, p["muted"], tracking=0.16)
+    title, sub, link = (
+        "Crypto market data, as Parquet",
+        "Point-in-time order flow, liquidity and microstructure metrics.",
+        "aperiodic.io",
+    )
+    svg.text(f.bold, title, 22, m, 70, p["ink"])
+    svg.text(f.sans, sub, 13, m, 92, p["muted"])
+    svg.aperiodic(w - m - f.mono_bold.width(link, 13) / 2 - 30, 10, 60, p["ink"])  # centred over the address
+    svg.text(f.mono_bold, link, 13, w - m, 92, p["ink"], anchor="r")
+    words = max(f.bold.width(title, 22), f.sans.width(sub, 13))
+    assert m + words < w - m - f.mono_bold.width(link, 13) - 24, "the words run into the address"
+    svg.save(name)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
@@ -367,6 +415,8 @@ def main():
     figure(f, LIGHT, "size.svg")
     figure(f, DARK, "size-dark.svg")
     social(f, "social-preview.svg")
+    banner(f, LIGHT, "aperiodic.svg")
+    banner(f, DARK, "aperiodic-dark.svg")
 
 
 if __name__ == "__main__":

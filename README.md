@@ -341,6 +341,13 @@ every pull request.
 tparquet was built at [Aperiodic](https://aperiodic.io), a market data company that uses it on
 its own data and maintains it here, in the open.
 
+<a href="https://aperiodic.io">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/aperiodic-dark.svg">
+    <img alt="Aperiodic: crypto market data, as Parquet. Point-in-time order flow, liquidity and microstructure metrics for Binance, OKX and Hyperliquid. aperiodic.io" src="brand/aperiodic.svg" width="800">
+  </picture>
+</a>
+
 ## License
 
 Apache License 2.0 ([`LICENSE`](LICENSE)). `rust/parquet` is a modified copy of the Apache Arrow

@@ -15,6 +15,7 @@ narrowest in orange: Parquet columns, compressed.
 | [`tparquet-icon.svg`](tparquet-icon.svg) | app icon and favicon: the dark mark on its field of tiles |
 | [`size.svg`](size.svg), [`size-dark.svg`](size-dark.svg) | the README's size figure, drawn from [`bench/results.json`](../bench/results.json) |
 | [`social-preview.png`](social-preview.png) | GitHub social preview, 1280×640 (repository Settings, General, Social preview); its source is [`social-preview.svg`](social-preview.svg) |
+| [`aperiodic.svg`](aperiodic.svg), [`aperiodic-dark.svg`](aperiodic-dark.svg) | the banner under the README's Contributing: who builds tparquet |
 | [`make.py`](make.py) | draws every file above |
 
 ## Colors
@@ -52,6 +53,7 @@ Every word is converted to outlines, so the files render the same without the fo
   for one thing only.
 - Don't recolor the wordmark beyond ink and paper.
 - Square corners, flat colors: no rounded tiles, shadows or gradients on the marks.
+- The Aperiodic mark in the banner is drawn from aperiodic.io's own coordinates. Don't redraw it.
 
 ## Redrawing
 
