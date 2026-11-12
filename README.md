@@ -1,7 +1,7 @@
 <h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/tparquet-logo-dark.svg">
-    <img alt="tparquet" src="brand/tparquet-logo.svg" width="340">
+    <img alt="tparquet" src="brand/tparquet-logo.svg" width="377">
   </picture>
 </h1>
 
@@ -40,6 +40,11 @@ written two ways: with the writer's defaults, and *tuned*, with the best encodin
 column (DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT, DELTA_BYTE_ARRAY, ...), as the providers' own
 files are. A third baseline, *ALP*, is the tuned file with Parquet's new ALP encoding on every
 floating-point column.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/size-dark.svg">
+  <img alt="All 31 datasets: ZSTD(9) 957.1 MB, ZSTD(9) tuned 700.7 MB, ZSTD(9) ALP 649.5 MB, tparquet 478.6 MB, 0.50 times the size of ZSTD(9)" src="brand/size.svg" width="800">
+</picture>
 
 | Data | Rows | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | vs ZSTD(9) | vs tuned | vs ALP |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -317,6 +322,24 @@ the rules of the repository.
 The acceptance test also measures deterministic synthetic market data, against ZSTD(9): 50,000
 trades at 0.31×, and 5,000 L2 book snapshots stored as lists, where pcodec does not win, at
 1.07× (`cargo test --release -p tparquet --test acceptance -- --nocapture`).
+
+## Contributing
+
+tparquet is open source under the Apache License 2.0, and contributions are welcome: bug
+reports, questions, fixes, and support for more readers and writers.
+
+The most useful issue is a file that tparquet barely shrinks, or makes bigger. Attach what
+`tparquet inspect` prints for it and say what the data is: that is how the codec choice per
+column gets better. If you want to change the format itself, open an issue first, since every
+implementation reads the same spec and test vectors.
+
+For a pull request, [`CONTRIBUTING.md`](CONTRIBUTING.md) has the build and test commands for
+each package and the rules every change follows: a failing test first, the conformance vectors in
+[`testdata/`](testdata/README.md), mutation testing, and forks kept small. CI runs every check on
+every pull request.
+
+tparquet was built at [Aperiodic](https://aperiodic.io), a market data company that uses it on
+its own data and maintains it here, in the open.
 
 ## License
 
