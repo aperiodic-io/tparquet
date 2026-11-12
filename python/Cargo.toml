@@ -1,6 +1,6 @@
 [package]
 name = "tparquet-python"
-version = "0.1.0"
+version = "1.0.0"
 description = "Python bindings of tparquet (the tparquet._lib extension module)"
 edition.workspace = true
 rust-version.workspace = true

@@ -1043,7 +1043,7 @@ wheels = [
 
 [[package]]
 name = "polars-tparquet"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "polars", version = "2.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },

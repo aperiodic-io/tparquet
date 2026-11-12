@@ -1,6 +1,6 @@
 [package]
 name = "tparquet"
-version = "0.1.0"
+version = "1.0.0"
 description = "Parquet files with the PCODEC codec: writer with automatic codec selection, transcoding, and the tparquet CLI"
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,7 @@ exclude = ["src/bin/gen-testdata", "tests"]
 
 [dependencies]
 parquet = { workspace = true, features = ["arrow", "zstd", "snap", "lz4", "brotli", "flate2-zlib-rs", "pcodec"] }
-tparquet-core = { version = "0.1.0", path = "../core" }
+tparquet-core = { version = "1.0.0", path = "../core" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 arrow-buffer.workspace = true

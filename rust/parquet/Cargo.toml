@@ -546,7 +546,7 @@ version = "60.1.0"
 optional = true
 
 [dependencies.tparquet-core]
-version = "0.1.0"
+version = "1.0.0"
 path = "../core"
 optional = true
 
@@ -673,7 +673,7 @@ features = ["services-memory"]
 default-features = false
 
 [dev-dependencies.tparquet-core]
-version = "0.1.0"
+version = "1.0.0"
 path = "../core"
 
 [dev-dependencies.proptest]

@@ -3177,7 +3177,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tparquet"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -3208,7 +3208,7 @@ dependencies = [
 
 [[package]]
 name = "tparquet-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "pco",
  "proptest",
@@ -3291,7 +3291,7 @@ dependencies = [
 
 [[package]]
 name = "tparquet-python"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arrow-array",
  "arrow-data",

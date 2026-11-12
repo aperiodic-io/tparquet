@@ -711,7 +711,7 @@ def test_stream_options_are_passed_on(tmp_path: pathlib.Path, numbers: pa.Table)
 
 
 def test_version() -> None:
-    assert ppc.__version__ == "0.1.0"
+    assert ppc.__version__ == "1.0.0"
 
 
 def test_text_mode_files_are_refused_with_a_type_error(tmp_path: pathlib.Path, numbers: pa.Table) -> None:

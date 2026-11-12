@@ -309,7 +309,7 @@ that adds the codec ([`rust/parquet/FORK.md`](rust/parquet/FORK.md)). From crate
 
 ```toml
 [dependencies]
-tparquet = "0.1"
+tparquet = "1"
 arrow-array = "60.1"
 arrow-schema = "60.1"
 ```

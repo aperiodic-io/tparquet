@@ -19,7 +19,7 @@ tparquet encode trades.parquet trades.pcodec.parquet
 
 ```toml
 [dependencies]
-tparquet = "0.1"
+tparquet = "1"
 ```
 
 ```rust,ignore
