@@ -25,9 +25,12 @@ groups, statistics and page indexes. Read and write them from Python, pandas, Po
 Go, Rust, Java, Spark, Trino, DataFusion, C and C++.
 
 tparquet adds one thing to Parquet: a compression codec, PCODEC, that runs
-[pcodec](https://github.com/pcodec/pcodec), an established open-source codec for numbers, on
-numeric columns. Prices and sizes that are short decimals are stored as exact integers.
-Everything else in the file stays standard Parquet. [What pcodec is](#what-pcodec-is).
+[pcodec](https://github.com/pcodec/pcodec), an established open-source codec for numbers
+([what pcodec is](#what-pcodec-is)), on numeric columns. Prices and sizes that are short
+decimals are stored as exact integers. Everything else in the file stays standard Parquet.
+The format is backed by [Aperiodic](https://aperiodic.io), a market data provider that is
+committed to supporting it, along with its specification and these packages, for the long
+term.
 
 ## How much smaller
 
