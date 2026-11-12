@@ -14,6 +14,10 @@
 [![C++](https://github.com/aperiodic-io/tparquet/actions/workflows/cpp.yml/badge.svg)](https://github.com/aperiodic-io/tparquet/actions/workflows/cpp.yml)
 [![Cross-language](https://github.com/aperiodic-io/tparquet/actions/workflows/acceptance.yml/badge.svg)](https://github.com/aperiodic-io/tparquet/actions/workflows/acceptance.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/tparquet.svg)](https://crates.io/crates/tparquet)
+[![docs.rs](https://img.shields.io/docsrs/tparquet)](https://docs.rs/tparquet)
+[![PyPI](https://img.shields.io/pypi/v/tparquet.svg)](https://pypi.org/project/tparquet/)
+[![PyPI polars-tparquet](https://img.shields.io/pypi/v/polars-tparquet.svg?label=pypi%20polars-tparquet)](https://pypi.org/project/polars-tparquet/)
 
 **Parquet for time series.** Trade and tick files at about half their ZSTD size (0.49× on
 139M trades from four market data providers), lossless, and still Parquet: same schema, row
@@ -125,7 +129,19 @@ Each release publishes the Rust crates to crates.io and the Python packages to P
 ([`RELEASING.md`](RELEASING.md)); the other packages build from a checkout of this repository
 (each needs a Rust toolchain). [`INSTALL.md`](INSTALL.md) has the prerequisites, the steps for
 each use case on Linux, macOS and Windows, using the packages from your own project (Cargo, pip
-and uv, Go modules, Maven and Gradle, CMake), and troubleshooting. In short:
+and uv, Go modules, Maven and Gradle, CMake), and troubleshooting.
+
+The released packages:
+
+| Registry | Package | API docs |
+|---|---|---|
+| crates.io | [`tparquet`](https://crates.io/crates/tparquet): the library and the `tparquet` CLI | [docs.rs](https://docs.rs/tparquet) |
+| crates.io | [`tparquet-parquet`](https://crates.io/crates/tparquet-parquet): the arrow-rs `parquet` crate with the codec | [docs.rs](https://docs.rs/tparquet-parquet) |
+| crates.io | [`tparquet-core`](https://crates.io/crates/tparquet-core): the page codec alone | [docs.rs](https://docs.rs/tparquet-core) |
+| PyPI | [`tparquet`](https://pypi.org/project/tparquet/): Python, pandas, Polars, DuckDB | |
+| PyPI | [`polars-tparquet`](https://pypi.org/project/polars-tparquet/): the Polars plugin | |
+
+In short:
 
 ```sh
 cargo install tparquet                       # CLI (from a checkout: cargo install --path rust/tparquet)
@@ -260,12 +276,12 @@ Use plain ZSTD Parquet when the files must be read by tools you don't control.
 
 | Where | Package | Notes |
 |---|---|---|
-| Rust | [`rust/tparquet`](rust/tparquet) | writer with automatic codec choice, `transcode`, `inspect`, `verify`, and the `tparquet` CLI |
-| Rust, the `parquet` API | [`rust/parquet`](rust/parquet) | a small fork of the arrow-rs `parquet` crate 60.1.0 that adds the codec, published as `tparquet-parquet` (library name `parquet`); changes listed in [`FORK.md`](rust/parquet/FORK.md). Use it as `parquet = { package = "tparquet-parquet", version = "=60.1.0" }` |
-| Rust, no Parquet | [`rust/core`](rust/core) | the page payload codec alone |
+| Rust | [`rust/tparquet`](rust/tparquet), [crates.io](https://crates.io/crates/tparquet) | writer with automatic codec choice, `transcode`, `inspect`, `verify`, and the `tparquet` CLI |
+| Rust, the `parquet` API | [`rust/parquet`](rust/parquet), [crates.io](https://crates.io/crates/tparquet-parquet) | a small fork of the arrow-rs `parquet` crate 60.1.0 that adds the codec, published as `tparquet-parquet` (library name `parquet`); changes listed in [`FORK.md`](rust/parquet/FORK.md). Use it as `parquet = { package = "tparquet-parquet", version = "=60.1.0" }` |
+| Rust, no Parquet | [`rust/core`](rust/core), [crates.io](https://crates.io/crates/tparquet-core) | the page payload codec alone |
 | C | [`rust/capi`](rust/capi) | C ABI over the core ([`tparquet.h`](rust/capi/include/tparquet.h)) |
 | Go | [`go/`](go) | arrow-go codec plugin (no fork: `compress.RegisterCodec`) and writer helpers |
-| Python, pandas, Polars | [`python/`](python) | pyo3 package: `read_table`, `write_table`, `Writer`; `tparquet.pandas`, `tparquet.polars` (`scan_parquet` with pushdown), `tparquet.duckdb` |
+| Python, pandas, Polars | [`python/`](python), [PyPI](https://pypi.org/project/tparquet/) | pyo3 package: `read_table`, `write_table`, `Writer`; `tparquet.pandas`, `tparquet.polars` (`scan_parquet` with pushdown), `tparquet.duckdb` |
 | DuckDB | [`duckdb/`](duckdb) | DuckDB's own parquet extension with PCODEC (a patch over DuckDB 1.5.6 and 2.0.0): `read_tparquet(...)`, `COPY ... (FORMAT tparquet)` |
 | Java, anything on parquet-java | [`java/`](java) | a small fork of parquet-java 1.17.0 (`parquet-format-structures`, `parquet-common`, `parquet-hadoop`; [`FORK.md`](java/parquet-java/FORK.md)), the codec over JNI ([`tparquet-jni`](java/tparquet-jni), [`rust/jni`](rust/jni)), and [`tparquet`](java/tparquet): `TparquetWriter`, `TparquetReader`, canonical rows |
 | Spark | [`java/tparquet-spark`](java/tparquet-spark) | Spark 4.3 reads PCODEC through the parquet-java fork (every reader); the `tparquet` data source writes it ([Java README](java/README.md#spark)) |
@@ -273,7 +289,7 @@ Use plain ZSTD Parquet when the files must be read by tools you don't control.
 | Trino | [`trino/`](trino) | Trino 484 reads tparquet through its connectors that use trino-parquet (Hive tested end to end; the script also installs into Iceberg, Delta Lake and Hudi): [`install-tparquet.sh`](trino/install-tparquet.sh) puts forks of trino-parquet 484 ([`FORK.md`](trino/trino-parquet/FORK.md)) and parquet-java 1.18.1 ([`FORK.md`](java/parquet-java-1.18/FORK.md)) into a Trino install |
 | C++ | [`cpp/`](cpp) | a small fork of Apache Arrow C++ 26.0.1 (a patch over the release, [`FORK.md`](cpp/arrow/FORK.md)) and `tparquet::ReadTable`/`WriteTable`/`FileWriter`; CMake package `tparquet` |
 | C | [`rust/cread`](rust/cread) | reader as an Arrow C stream ([`tparquet_read.h`](rust/cread/include/tparquet_read.h)), `libtparquet_read` |
-| Polars | [`polars-tparquet/`](polars-tparquet) | Polars plugin `polars-tparquet`: `scan_tparquet` over files, lists, globs and directories (lazy, with pushdown), `read_tparquet`, `df.tparquet.write(...)`, `lf.tparquet.sink(...)` (streamed) |
+| Polars | [`polars-tparquet/`](polars-tparquet), [PyPI](https://pypi.org/project/polars-tparquet/) | Polars plugin `polars-tparquet`: `scan_tparquet` over files, lists, globs and directories (lazy, with pushdown), `read_tparquet`, `df.tparquet.write(...)`, `lf.tparquet.sink(...)` (streamed) |
 
 ## Development
 
