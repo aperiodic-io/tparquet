@@ -34,17 +34,17 @@ term.
 
 ## How much smaller
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/size-dark.svg">
+  <img alt="All 31 datasets: ZSTD(9) 957.1 MB, ZSTD(9) tuned 700.7 MB, ZSTD(9) ALP 649.5 MB, tparquet 478.6 MB, 0.50 times the size of ZSTD(9)" src="brand/size.svg" width="800">
+</picture>
+
 Measured on the sample and preview data of four market data providers: Aperiodic, Tardis.dev,
 Crypto Lake and NYSE, 151M rows in 31 datasets. The baseline is Parquet with ZSTD level 9,
 written two ways: with the writer's defaults, and *tuned*, with the best encoding chosen per
 column (DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT, DELTA_BYTE_ARRAY, ...), as the providers' own
 files are. A third baseline, *ALP*, is the tuned file with Parquet's new ALP encoding on every
 floating-point column.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="brand/size-dark.svg">
-  <img alt="All 31 datasets: ZSTD(9) 957.1 MB, ZSTD(9) tuned 700.7 MB, ZSTD(9) ALP 649.5 MB, tparquet 478.6 MB, 0.50 times the size of ZSTD(9)" src="brand/size.svg" width="800">
-</picture>
 
 | Data | Rows | ZSTD(9) | ZSTD(9) tuned | ZSTD(9) ALP | tparquet | vs ZSTD(9) | vs tuned | vs ALP |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
