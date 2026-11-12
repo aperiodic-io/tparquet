@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "polars-tparquet"
-version = "0.1.0"
+version = "1.0.0"
 description = "Polars plugin for tparquet: scan, read, write and sink Parquet files with the PCODEC codec"
 readme = "README.md"
 requires-python = ">=3.10"

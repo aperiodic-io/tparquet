@@ -31,7 +31,7 @@ intended change, which must also be listed below.
 |---|---|---|---|
 | `Cargo.toml` | `[package]` | `name = "tparquet-parquet"`; `description` and `repository` name this fork | crates.io: `parquet` is upstream's name; the library name stays `parquet` |
 | `Cargo.toml` | `[features]` | new feature `pcodec = ["dep:tparquet-core"]`, in `default` | the codec, default on like the other codecs |
-| `Cargo.toml` | `[dependencies]`, `[dev-dependencies]` | `tparquet-core = { version = "0.1.0", path = "../core" }` (optional; and for tests) | the payload encoder and decoder; unit tests build every codec, as upstream does with `cfg(any(feature, test))` |
+| `Cargo.toml` | `[dependencies]`, `[dev-dependencies]` | `tparquet-core = { version = "1.0.0", path = "../core" }` (optional; and for tests) | the payload encoder and decoder; unit tests build every codec, as upstream does with `cfg(any(feature, test))` |
 | `src/basic.rs` | `CompressionCodec` (thrift enum) | `PCODEC = 20547` | the codec id of spec section 2 |
 | `src/basic.rs` | `Compression` | variant `PCODEC(PcodecLevel)` | the writer-side codec choice |
 | `src/basic.rs` | `From<CompressionCodec> for Compression`, `From<Compression> for CompressionCodec` | `PCODEC` arms | conversion to and from the footer |

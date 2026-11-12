@@ -1,5 +1,5 @@
 diff --git upstream/Cargo.toml fork/Cargo.toml
-index b38b46b7501c4e399f44deed6fd7c35b86cf6819..349562232b892555ec1b47a37a41a7a93710e531 100644
+index b38b46b7501c4e399f44deed6fd7c35b86cf6819..e76a5bb6a6f2f4bbbeff2e7df72b8d2637195029 100644
 --- upstream/Cargo.toml
 +++ fork/Cargo.toml
 @@ -12,7 +12,7 @@
@@ -50,7 +50,7 @@ index b38b46b7501c4e399f44deed6fd7c35b86cf6819..349562232b892555ec1b47a37a41a7a9
  optional = true
  
 +[dependencies.tparquet-core]
-+version = "0.1.0"
++version = "1.0.0"
 +path = "../core"
 +optional = true
 +
@@ -62,7 +62,7 @@ index b38b46b7501c4e399f44deed6fd7c35b86cf6819..349562232b892555ec1b47a37a41a7a9
  default-features = false
  
 +[dev-dependencies.tparquet-core]
-+version = "0.1.0"
++version = "1.0.0"
 +path = "../core"
 +
  [dev-dependencies.proptest]

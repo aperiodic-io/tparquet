@@ -1,6 +1,6 @@
 [package]
 name = "tparquet-core"
-version = "0.1.0"
+version = "1.0.0"
 description = "The PCODEC Parquet compression codec payload (spec/FORMAT.md)"
 edition.workspace = true
 rust-version.workspace = true
