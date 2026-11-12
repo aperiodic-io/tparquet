@@ -382,14 +382,14 @@ def banner(f, p, name):
     """Who builds tparquet, in one line: Aperiodic's mark on its field, what it does, and its
     address."""
     w, h, m = 800, 112, 32
-    svg = Svg(w, h, "Built at Aperiodic: crypto market data, as Parquet. aperiodic.io")
+    svg = Svg(w, h, "Aperiodic: microstructure, liquidity and flow metrics and indices for RWA and crypto perps")
     svg.field(p)
     svg.hshade(p, [(0, 0.9), (0.45, 0.9), (1, 0.3)])
     svg.rect(m, 28, 12, 12, p["signal"])
-    svg.text(f.mono, "BINANCE · OKX · HYPERLIQUID", 11, m + 22, 39, p["muted"], tracking=0.16)
+    svg.text(f.mono, "RWA AND CRYPTO PERPS · BINANCE · OKX · HYPERLIQUID", 11, m + 22, 39, p["muted"], tracking=0.16)
     title, sub, link = (
-        "Crypto market data, as Parquet",
-        "Point-in-time order flow, liquidity and microstructure metrics.",
+        "Microstructure, liquidity and flow metrics",
+        "and the Cost, Depth and Impact indices, point in time, as Parquet.",
         "aperiodic.io",
     )
     svg.text(f.bold, title, 22, m, 70, p["ink"])
