@@ -21,8 +21,9 @@ groups, statistics and page indexes. Read and write them from Python, pandas, Po
 Go, Rust, Java, Spark, Trino, DataFusion, C and C++.
 
 tparquet adds one thing to Parquet: a compression codec, PCODEC, that runs
-[pcodec](https://github.com/pcodec/pcodec) on numeric columns. Prices and sizes that are short
-decimals are stored as exact integers. Everything else in the file stays standard Parquet.
+[pcodec](https://github.com/pcodec/pcodec), an established open-source codec for numbers, on
+numeric columns. Prices and sizes that are short decimals are stored as exact integers.
+Everything else in the file stays standard Parquet. [What pcodec is](#what-pcodec-is).
 
 ## How much smaller
 
@@ -68,6 +69,30 @@ tparquet decode trades.pcodec.parquet trades.standard.parquet   # and back to st
 
 Nothing about your original file changes, and `decode` takes you back whenever you want.
 
+## What pcodec is
+
+[pcodec](https://github.com/pcodec/pcodec) is a lossless compression codec built only for
+numbers. A general-purpose compressor like ZSTD sees bytes. pcodec sees integers and floats.
+It learns how the values are distributed, removes trends with delta encoding, and spots
+structure such as prices that are all multiples of a tick size. Then it spends the fewest
+bits it can on each value.
+
+It is neither new nor an experiment:
+
+- **In development since 2021.** It began as `q_compress` in May 2021 and was redesigned as
+  pcodec in 2023. Version 1.0, with a stable format, came out in January 2026.
+- **Actively maintained.** 58 tagged releases and 19 contributors so far, on a regular
+  release cadence. 1.1.0 came out in November 2026.
+- **Peer-reviewed and widely used.** It is described in the paper
+  [*Pcodec: Better Compression for Numerical Sequences*](https://arxiv.org/abs/2502.06112),
+  and is a codec in [Zarr](https://numcodecs.readthedocs.io/) (`numcodecs`, `zarrs`) and in
+  the [Vortex](https://github.com/vortex-data/vortex) file format. The Rust crate `pco` has
+  over 2 million downloads.
+- **Apache-2.0**, written in Rust, with bindings for Python, Java and C.
+
+tparquet uses the released `pco` crate as is. Each compressed page is a pcodec standalone file
+behind a two-byte header ([`spec/FORMAT.md`](spec/FORMAT.md)).
+
 ## It's still Parquet
 
 PCODEC is set per column chunk in `ColumnMetaData.codec`, exactly like `ZSTD` or `SNAPPY`.
@@ -91,9 +116,8 @@ of vendor data in tparquet, and `tparquet decode` (or `transcode`) at the edge f
 other teams, managed warehouses and BI tools. [`docs/STORAGE-TIER.md`](docs/STORAGE-TIER.md)
 has the recipes, and the cases where it does not pay.
 
-Making PCODEC a standard codec, so that any Parquet reader can open these files, is the
-proposal in [`spec/UPSTREAM.md`](spec/UPSTREAM.md): what would change in `parquet.thrift`,
-the evidence, and the work still needed before it goes to the Apache Parquet community.
+Work to make PCODEC a standard Parquet codec, so that any Parquet reader can open these
+files, is in progress ([`spec/UPSTREAM.md`](spec/UPSTREAM.md)).
 
 ## Install
 
