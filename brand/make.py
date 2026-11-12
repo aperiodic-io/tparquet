@@ -386,7 +386,7 @@ def banner(f, p, name):
     svg.field(p)
     svg.hshade(p, [(0, 0.9), (0.45, 0.9), (1, 0.3)])
     svg.rect(m, 28, 12, 12, p["signal"])
-    svg.text(f.mono, "RWA AND CRYPTO PERPS · BINANCE · OKX · HYPERLIQUID", 11, m + 22, 39, p["muted"], tracking=0.16)
+    svg.text(f.mono, "RWA AND CRYPTO PERPS", 11, m + 22, 39, p["muted"], tracking=0.16)
     title, sub, link = (
         "Microstructure, liquidity and flow metrics",
         "and the Cost, Depth and Impact indices, point in time, as Parquet.",

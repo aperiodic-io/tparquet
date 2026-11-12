@@ -344,7 +344,7 @@ its own data and maintains it here, in the open.
 <a href="https://aperiodic.io">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/aperiodic-dark.svg">
-    <img alt="Aperiodic: microstructure, liquidity and flow metrics, and the Cost, Depth and Impact indices, for RWA and crypto perps on Binance, OKX and Hyperliquid, point in time, as Parquet. aperiodic.io" src="brand/aperiodic.svg" width="800">
+    <img alt="Aperiodic: microstructure, liquidity and flow metrics, and the Cost, Depth and Impact indices, for RWA and crypto perps, point in time, as Parquet. aperiodic.io" src="brand/aperiodic.svg" width="800">
   </picture>
 </a>
 
