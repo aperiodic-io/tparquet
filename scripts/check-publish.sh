@@ -7,7 +7,9 @@
 #   2. the crates.io crates package and build from their packaged sources alone, in dependency
 #      order, each against the others' packages (cargo publish --dry-run);
 #   3. the tparquet crate ships the tparquet CLI and nothing that needs this repository
-#      (gen-testdata writes into testdata/, the tests read it).
+#      (gen-testdata writes into testdata/, the tests read it);
+#   4. tparquet-parquet 59.3.2, the datafusion/parquet fork renamed (scripts/package-parquet-59.sh),
+#      packages and builds from its packaged sources, against tparquet-core from crates.io.
 #
 #   scripts/check-publish.sh [--allow-dirty] [TAG]
 #
@@ -69,4 +71,12 @@ if [ -e "$package/tests" ] || [ -e "$package/src/bin/gen-testdata" ]; then
     fail "the tparquet package contains tests/ or gen-testdata, which need this repository"
 fi
 
-echo "check-publish: ${crates[*]} and the Python packages at $version are publishable"
+# outside the repository, or cargo takes the root workspace for the package's
+parquet59=$(mktemp -d)/tparquet-parquet-59
+trap 'rm -rf "$(dirname "$parquet59")"' EXIT
+scripts/package-parquet-59.sh "$parquet59"
+# not --locked: its Cargo.lock is upstream's, of the package `parquet` with tparquet-core by path;
+# a library's lock pins nothing for its users
+(cd "$parquet59" && cargo publish --dry-run)
+
+echo "check-publish: ${crates[*]}, tparquet-parquet 59.3.2 and the Python packages at $version are publishable"

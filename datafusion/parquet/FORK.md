@@ -16,6 +16,11 @@ here with `[patch.crates-io]`.
 The crate is vendored as published (its normalized `Cargo.toml`), without `Cargo.toml.orig`.
 `FORK.md` and `FORK.patch` are not part of upstream.
 
+On crates.io it is `tparquet-parquet` 59.3.2, beside the 60.1.0 of `rust/parquet`. The tree keeps
+the name `parquet`, which the `[patch]` needs; `scripts/package-parquet-59.sh` makes the
+published package from a copy of it, changing only the package name, description and
+repository, and taking `tparquet-core` from crates.io (`RELEASING.md`).
+
 `FORK.patch` is the complete diff from upstream to this tree. `scripts/check-fork.sh`
 downloads the upstream crate, checks the sha256 above, and fails unless the diff of the
 git-tracked files equals `FORK.patch` (`scripts/check-fork.sh datafusion/parquet` checks this

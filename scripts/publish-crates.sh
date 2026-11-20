@@ -2,7 +2,8 @@
 # Publishes the crates.io crates (scripts/check-publish.sh) whose version crates.io does not have
 # yet, in dependency order. tparquet-parquet keeps upstream's version (rust/parquet/FORK.md), so a
 # release of tparquet often has no new tparquet-parquet; a version already published is skipped
-# rather than refused, which also makes a failed release safe to run again.
+# rather than refused, which also makes a failed release safe to run again. tparquet-parquet
+# 59.3.2 (the datafusion/parquet fork, scripts/package-parquet-59.sh) is published the same way.
 #
 #   CARGO_REGISTRY_TOKEN=... scripts/publish-crates.sh [--dry-run]
 set -euo pipefail
@@ -51,7 +52,19 @@ print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] =
 done
 
 if [ "${#args[@]}" -eq 0 ]; then
-    echo "publish-crates: nothing to publish"
-    exit 0
+    echo "publish-crates: nothing to publish from the workspace"
+else
+    cargo publish --locked "${dry_run[@]}" "${args[@]}"
 fi
-cargo publish --locked "${dry_run[@]}" "${args[@]}"
+
+# after tparquet-core, which it needs from crates.io
+if published tparquet-parquet 59.3.2; then
+    echo "publish-crates: tparquet-parquet 59.3.2 is on crates.io already, skipped"
+else
+    echo "publish-crates: tparquet-parquet 59.3.2"
+    parquet59=$(mktemp -d)/tparquet-parquet-59
+    trap 'rm -rf "$(dirname "$parquet59")"' EXIT
+    scripts/package-parquet-59.sh "$parquet59"
+    # not --locked: its Cargo.lock is upstream's (check-publish.sh)
+    (cd "$parquet59" && cargo publish "${dry_run[@]}")
+fi

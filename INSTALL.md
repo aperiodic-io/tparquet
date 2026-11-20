@@ -334,7 +334,16 @@ of the `parquet` API read and write PCODEC. To use the fork directly, under its 
 parquet = { package = "tparquet-parquet", version = "=60.1.0" }
 ```
 
-Your other Arrow crates must be on arrow 60. Crates in your build that depend on upstream
+Your other Arrow crates must be on arrow 60. For arrow 59 (DataFusion 55, or a writer that
+must not mark floats `IEEE_754_TOTAL_ORDER`, as parquet 60 does), the same codec is published
+on the 59 line, built from [`datafusion/parquet`](datafusion/parquet/FORK.md):
+
+```toml
+[dependencies]
+parquet = { package = "tparquet-parquet", version = "=59.3.2" }
+```
+
+Crates in your build that depend on upstream
 `parquet` keep upstream's crate, which does not have the codec: Cargo's `[patch]` replaces a
 crate only with a package of the same name, so the fork cannot stand in for them. Read and write
 PCODEC files through `tparquet` or `tparquet-parquet`.
