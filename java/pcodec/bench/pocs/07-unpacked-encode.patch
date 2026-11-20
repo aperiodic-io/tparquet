@@ -1,0 +1,43 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
+index 8c5b13d..65935cc 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
+@@ -62,9 +62,9 @@ final class Ans {
+   /** {@code ans::Encoder} */
+   static final class Encoder {
+     final int sizeLog;
+-    private final int[] renormBitCutoff;
+-    private final int[] minRenormBits;
+-    private final int[][] nextStates;
++    final int[] renormBitCutoff;
++    final int[] minRenormBits;
++    final int[][] nextStates;
+ 
+     Encoder(Spec spec) {
+       int tableSize = spec.tableSize();
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..7519d6f 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -150,12 +150,18 @@ final class ChunkCompressor {
+     }
+ 
+     private void encodeOne(Dissected d, int rs, int i, int j) {
++      // Ans.Encoder.encode inlined, so the new state and the bit count need not be packed into
++      // a long and unpacked again
+       int state = d.ansFinalStates[j];
+-      long r = encoder.encode(state, scratchSymbols[i]);
+-      int bitlen = (int) (r >>> 32);
++      int symbol = scratchSymbols[i];
++      int bitlen =
++          Integer.compareUnsigned(state, encoder.renormBitCutoff[symbol]) >= 0
++              ? encoder.minRenormBits[symbol] + 1
++              : encoder.minRenormBits[symbol];
++      int[] ns = encoder.nextStates[symbol];
+       d.ansVals[rs + i] = state & ((1 << bitlen) - 1);
+       d.ansBits[rs + i] = bitlen;
+-      d.ansFinalStates[j] = (int) r;
++      d.ansFinalStates[j] = ns[(state >>> bitlen) - ns.length];
+     }
+ 
+     void writeDissectedBatch(Dissected d, int batchStart, BitWriter w) {

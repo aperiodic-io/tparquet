@@ -1,0 +1,22 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
+index 6ef9382..66b01a9 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/SortUtils.java
+@@ -66,9 +66,15 @@ final class SortUtils {
+    * pivot was bad.
+    */
+   static long partition(long[] v, int from, int to, long pivot) {
+-    int leftIdx = 0;
+     int len = to - from;
+-    for (int pos = 0; pos < len; pos++) {
++    // while every element so far is below the pivot, leftIdx == pos and the swap below stores each
++    // element where it already is: skip the stores. Once one is not below, leftIdx < pos for good.
++    int pos = 0;
++    while (pos < len && Latent.lt(v[from + pos], pivot)) {
++      pos++;
++    }
++    int leftIdx = pos;
++    for (; pos < len; pos++) {
+       long value = v[from + pos];
+       boolean isLt = Latent.lt(value, pivot);
+       v[from + pos] = v[from + leftIdx];

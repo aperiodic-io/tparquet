@@ -1,0 +1,76 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/BitWriter.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/BitWriter.java
+index 6559bf7..6316065 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/BitWriter.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/BitWriter.java
+@@ -29,6 +29,51 @@ final class BitWriter {
+     bitIdx += n;
+   }
+ 
++  /**
++   * Writes a batch as {@code writeDissectedBatch} lays it out: the ANS values {@code
++   * ansVals[from..to)} (if {@code withAns}), then the offsets {@code offsets[from..to)}, each with
++   * its bit count, as {@link #writeUint} one by one would. The buffer and the position stay in
++   * locals, and the capacity is checked once, for the batch's worst case (32 bits per ANS value,
++   * 64 per offset).
++   */
++  void writeBatch(
++      int[] ansVals, int[] ansBits, long[] offsets, int[] offsetBits, int from, int to, boolean withAns) {
++    long maxBits = (long) (to - from) * (withAns ? 96 : 64);
++    ensure((bitIdx >>> 3) + (maxBits >>> 3) + 9);
++    byte[] b = buf;
++    long idx = bitIdx;
++    if (withAns) {
++      for (int i = from; i < to; i++) {
++        long x = ansVals[i] & 0xffffffffL;
++        if (x != 0) {
++          orAt(b, idx, x);
++        }
++        idx += ansBits[i];
++      }
++    }
++    for (int i = from; i < to; i++) {
++      long x = offsets[i];
++      if (x != 0) {
++        orAt(b, idx, x);
++      }
++      idx += offsetBits[i];
++    }
++    bitIdx = idx;
++  }
++
++  /** ORs {@code x} in at bit {@code idx}; the 9 bytes from its byte must exist */
++  private static void orAt(byte[] b, long idx, long x) {
++    int byteIdx = (int) (idx >>> 3);
++    int off = (int) (idx & 7);
++    long lo = x << off;
++    for (int i = 0; i < 8; i++) {
++      b[byteIdx + i] |= (byte) (lo >>> (8 * i));
++    }
++    if (off > 0) {
++      b[byteIdx + 8] |= (byte) (x >>> (64 - off));
++    }
++  }
++
+   void writeBool(boolean b) {
+     writeUint(b ? 1 : 0, 1);
+   }
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..04a18ab 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -163,14 +163,7 @@ final class ChunkCompressor {
+         return;
+       }
+       int end = Math.min(batchStart + FULL_BATCH_N, d.offsets.length);
+-      if (needsAns) {
+-        for (int i = batchStart; i < end; i++) {
+-          w.writeUint(d.ansVals[i] & 0xffffffffL, d.ansBits[i]);
+-        }
+-      }
+-      for (int i = batchStart; i < end; i++) {
+-        w.writeUint(d.offsets[i], d.offsetBits[i]);
+-      }
++      w.writeBatch(d.ansVals, d.ansBits, d.offsets, d.offsetBits, batchStart, end, needsAns);
+     }
+   }
+ 

@@ -1,0 +1,187 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/LongIndexMap.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/LongIndexMap.java
+new file mode 100644
+index 0000000..3f74bf3
+--- /dev/null
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/LongIndexMap.java
+@@ -0,0 +1,90 @@
++package io.aperiodic.pcodec;
++
++import java.util.Arrays;
++
++/**
++ * An open-addressing set of {@code long} keys that numbers them in order of first insertion:
++ * key {@code i} is the {@code i}-th distinct key added. Callers keep their values in arrays
++ * indexed by that number, so iterating {@code 0 .. size()} is a {@code LinkedHashMap}'s order.
++ */
++final class LongIndexMap {
++  private static final long PHI = 0x9E3779B97F4A7C15L;
++
++  private long[] keys;
++  /** 0 for an empty slot, else the key's index + 1 */
++  private int[] slots;
++  private int shift;
++  private int size;
++
++  LongIndexMap(int expected) {
++    int cap = 16;
++    while (cap < 2L * expected && cap < (1 << 30)) {
++      cap <<= 1;
++    }
++    slots = new int[cap];
++    shift = 64 - Integer.numberOfTrailingZeros(cap);
++    keys = new long[Math.max(cap >>> 1, 1)];
++  }
++
++  int size() {
++    return size;
++  }
++
++  long key(int index) {
++    return keys[index];
++  }
++
++  /** the key's index, or -1 */
++  int get(long key) {
++    int mask = slots.length - 1;
++    for (int s = (int) ((key * PHI) >>> shift); ; s = (s + 1) & mask) {
++      int v = slots[s];
++      if (v == 0) {
++        return -1;
++      }
++      if (keys[v - 1] == key) {
++        return v - 1;
++      }
++    }
++  }
++
++  /** the key's index, adding it if absent */
++  int add(long key) {
++    int mask = slots.length - 1;
++    int s = (int) ((key * PHI) >>> shift);
++    while (true) {
++      int v = slots[s];
++      if (v == 0) {
++        break;
++      }
++      if (keys[v - 1] == key) {
++        return v - 1;
++      }
++      s = (s + 1) & mask;
++    }
++    int index = size++;
++    if (index == keys.length) {
++      keys = Arrays.copyOf(keys, keys.length * 2);
++    }
++    keys[index] = key;
++    slots[s] = index + 1;
++    if (2L * size > slots.length) {
++      rehash();
++    }
++    return index;
++  }
++
++  private void rehash() {
++    int cap = slots.length * 2;
++    slots = new int[cap];
++    shift = 64 - Integer.numberOfTrailingZeros(cap);
++    int mask = cap - 1;
++    for (int i = 0; i < size; i++) {
++      int s = (int) ((keys[i] * PHI) >>> shift);
++      while (slots[s] != 0) {
++        s = (s + 1) & mask;
++      }
++      slots[s] = i + 1;
++    }
++  }
++}
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
+index a4ed68b..4bd26e0 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
+@@ -2,7 +2,6 @@ package io.aperiodic.pcodec;
+ 
+ import java.util.ArrayList;
+ import java.util.Arrays;
+-import java.util.HashMap;
+ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -744,46 +743,56 @@ final class Modes {
+      * {@link #FORCED_ORDER} gives another.
+      */
+     static Bid computeBid(NumberType t, long[] nums) {
+-      long[] classic = new long[nums.length];
+-      Map<Long, int[]> countByUnique = new LinkedHashMap<>();
++      LongIndexMap uniques = new LongIndexMap(16);
++      int[] uniqueOf = new int[nums.length];
++      int[] counts = new int[16];
+       for (int i = 0; i < nums.length; i++) {
+-        classic[i] = t.toLatentOrdered(nums[i]);
+-        countByUnique.computeIfAbsent(classic[i], key -> new int[1])[0]++;
+-      }
+-      List<Map.Entry<Long, int[]>> entries = new ArrayList<>(countByUnique.entrySet());
+-      entries.sort((a, b) -> Integer.compareUnsigned(b.getValue()[0], a.getValue()[0]));
+-      long[] dict = new long[entries.size()];
++        int u = uniques.add(t.toLatentOrdered(nums[i]));
++        if (u == counts.length) {
++          counts = Arrays.copyOf(counts, counts.length * 2);
++        }
++        counts[u]++;
++        uniqueOf[i] = u;
++      }
++      int nUniques = uniques.size();
++      // counts descending, equal counts in order of first appearance (a stable sort's order)
++      long[] order = new long[nUniques];
++      for (int u = 0; u < nUniques; u++) {
++        order[u] = ((long) (Integer.MAX_VALUE - counts[u]) << 32) | u;
++      }
++      Arrays.sort(order);
++      long[] dict = new long[nUniques];
++      int[] rank = new int[nUniques];
+       long[] forced = FORCED_ORDER.get();
+       if (forced != null) {
+-        checkForcedOrder(forced, entries);
++        checkForcedOrder(forced, uniques, counts, order);
+       }
+-      Map<Long, Integer> idx = new HashMap<>();
+-      for (int i = 0; i < dict.length; i++) {
+-        dict[i] = forced != null ? forced[i] : entries.get(i).getKey();
+-        idx.put(dict[i], i);
++      for (int i = 0; i < nUniques; i++) {
++        int u = forced != null ? uniques.get(forced[i]) : (int) order[i];
++        dict[i] = uniques.key(u);
++        rank[u] = i;
+       }
+       long[] indices = new long[nums.length];
+       for (int i = 0; i < nums.length; i++) {
+-        indices[i] = idx.get(classic[i]) & 0xffffffffL;
++        indices[i] = rank[uniqueOf[i]] & 0xffffffffL;
+       }
+       Split split = new Split(indices, null);
+       return new Bid(Mode.dict(dict), 0.0, xs -> split);
+     }
+ 
+     /** a forced order is the reference's sort: the same values, counts descending */
+-    private static void checkForcedOrder(long[] forced, List<Map.Entry<Long, int[]>> entries) {
+-      Map<Long, Integer> counts = new HashMap<>();
+-      for (Map.Entry<Long, int[]> e : entries) {
+-        counts.put(e.getKey(), e.getValue()[0]);
+-      }
+-      if (forced.length != entries.size()) {
++    private static void checkForcedOrder(
++        long[] forced, LongIndexMap uniques, int[] counts, long[] order) {
++      if (forced.length != order.length) {
+         throw new IllegalArgumentException("forced dictionary has another size");
+       }
++      boolean[] used = new boolean[order.length];
+       for (int i = 0; i < forced.length; i++) {
+-        Integer c = counts.remove(forced[i]);
+-        if (c == null || c != entries.get(i).getValue()[0]) {
++        int u = uniques.get(forced[i]);
++        if (u < 0 || used[u] || counts[u] != counts[(int) order[i]]) {
+           throw new IllegalArgumentException("forced dictionary is not a count-descending permutation");
+         }
++        used[u] = true;
+       }
+     }
+   }

@@ -1,0 +1,56 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
+index 8c5b13d..4ae09dc 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Ans.java
+@@ -64,26 +64,36 @@ final class Ans {
+     final int sizeLog;
+     private final int[] renormBitCutoff;
+     private final int[] minRenormBits;
+-    private final int[][] nextStates;
++    /**
++     * Every symbol's next states, one after the other in one array (one load fewer per encode
++     * than an array per symbol): symbol {@code s}'s {@code weight} states start at its offset.
++     */
++    private final int[] nextStates;
++    /** per symbol, its offset in {@code nextStates} minus its weight, the reduced state's base */
++    private final int[] nextStatesBase;
+ 
+     Encoder(Spec spec) {
+       int tableSize = spec.tableSize();
+       int nSymbols = spec.symbolWeights.length;
+       renormBitCutoff = new int[nSymbols];
+       minRenormBits = new int[nSymbols];
+-      nextStates = new int[nSymbols][];
++      nextStates = new int[spec.stateSymbols.length];
++      nextStatesBase = new int[nSymbols];
+       int[] filled = new int[nSymbols];
++      int offset = 0;
+       for (int s = 0; s < nSymbols; s++) {
+         int weight = spec.symbolWeights[s];
+         int maxXs = 2 * weight - 1;
+         int mrb = spec.sizeLog - (31 - Integer.numberOfLeadingZeros(maxXs));
+         minRenormBits[s] = mrb;
+         renormBitCutoff[s] = 2 * weight * (1 << mrb);
+-        nextStates[s] = new int[weight];
++        filled[s] = offset;
++        nextStatesBase[s] = offset - weight;
++        offset += weight;
+       }
+       for (int stateIdx = 0; stateIdx < spec.stateSymbols.length; stateIdx++) {
+         int symbol = spec.stateSymbols[stateIdx];
+-        nextStates[symbol][filled[symbol]++] = tableSize + stateIdx;
++        nextStates[filled[symbol]++] = tableSize + stateIdx;
+       }
+       this.sizeLog = spec.sizeLog;
+     }
+@@ -94,8 +104,8 @@ final class Ans {
+           Integer.compareUnsigned(state, renormBitCutoff[symbol]) >= 0
+               ? minRenormBits[symbol] + 1
+               : minRenormBits[symbol];
+-      int[] ns = nextStates[symbol];
+-      int next = ns[(state >>> renormBits) - ns.length];
++      // the reduced state is in [weight, 2 * weight), so this stays within the symbol's states
++      int next = nextStates[nextStatesBase[symbol] + (state >>> renormBits)];
+       return ((long) renormBits << 32) | (next & 0xffffffffL);
+     }
+ 

@@ -1,0 +1,15 @@
+| case                     |  java enc |  rust enc |  ratio |  java dec |  rust dec |  ratio |   size |
+| f64 prices (auto)        |        78 |         - |      - |       265 |         - |      - |  0.046 |
+| f64 walk (auto)          |        75 |         - |      - |       522 |         - |      - |  0.709 |
+| f64 floatMult            |        95 |         - |      - |       344 |         - |      - |  0.223 |
+| f64 quant                |        59 |         - |      - |       303 |         - |      - |  0.307 |
+| f32 decimal              |        40 |         - |      - |       278 |         - |      - |  0.731 |
+| i64 timestamps           |       120 |         - |      - |       399 |         - |      - |  0.025 |
+| i64 uniform              |       147 |         - |      - |      1247 |         - |      - |  1.000 |
+| i64 mult (intMult)       |        96 |         - |      - |       347 |         - |      - |  0.260 |
+| i32 walk                 |        35 |         - |      - |       284 |         - |      - |  0.240 |
+| u32 periodic lookback    |        41 |         - |      - |       200 |         - |      - |  0.030 |
+| i32 quadratic conv1(2)   |        51 |         - |      - |       138 |         - |      - |  0.758 |
+| u16 dictish (dict)       |        27 |         - |      - |       132 |         - |      - |  0.174 |
+| i64 classic no-op        |       135 |         - |      - |       567 |         - |      - |  0.242 |
+| f64 sorted consec(2)     |        88 |         - |      - |       504 |         - |      - |  0.563 |

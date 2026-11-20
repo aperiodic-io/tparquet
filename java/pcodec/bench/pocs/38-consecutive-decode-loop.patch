@@ -1,0 +1,36 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+index fd8bdd5..c97ec4a 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+@@ -54,13 +54,27 @@ final class Delta {
+   }
+ 
+   static void consecutiveDecode(Latent lt, long[] moments, long[] v, int from, int to) {
+-    toggleCenter(lt, v, from, to);
+-    for (int m = moments.length - 1; m >= 0; m--) {
+-      long moment = moments[m];
++    int m = moments.length - 1;
++    if (m < 0) {
++      toggleCenter(lt, v, from, to);
++      return;
++    }
++    long mask = lt.mask;
++    long mid = lt.mid;
++    // the first prefix sum toggles the center as it goes
++    long moment = moments[m];
++    for (int i = from; i < to; i++) {
++      long tmp = (v[i] + mid) & mask;
++      v[i] = moment;
++      moment = (moment + tmp) & mask;
++    }
++    moments[m] = moment;
++    for (m--; m >= 0; m--) {
++      moment = moments[m];
+       for (int i = from; i < to; i++) {
+         long tmp = v[i];
+         v[i] = moment;
+-        moment = lt.add(moment, tmp);
++        moment = (moment + tmp) & mask;
+       }
+       moments[m] = moment;
+     }

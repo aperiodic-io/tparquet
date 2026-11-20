@@ -1,0 +1,70 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java
+index deb1e5f..f8e66db 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/FloatMult.java
+@@ -33,8 +33,8 @@ final class FloatMult {
+ 
+   static Modes.Split splitLatents(NumberType t, FloatType f, long[] nums, Config c) {
+     Latent lt = t.latent;
+-    long[] primary = new long[nums.length];
+-    long[] adj = new long[nums.length];
++    long[] primary = Modes.splitArray(0, nums.length);
++    long[] adj = Modes.splitArray(1, nums.length);
+     for (int i = 0; i < nums.length; i++) {
+       long num = nums[i];
+       long mult = f.round(f.mul(num, c.invBase));
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
+index a4ed68b..8e1c7f1 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
+@@ -408,8 +408,27 @@ final class Modes {
+     return new Bid(Mode.CLASSIC, 0.0, xs -> classicSplit(t, xs));
+   }
+ 
++  /**
++   * The arrays the mode splits write into, per thread: a split of as many numbers as the last one
++   * reuses them. A split's latents live as long as the chunk compressor made from them, and a
++   * thread finishes with one chunk before it splits the next.
++   */
++  private static final ThreadLocal<long[][]> SPLIT_ARRAYS =
++      ThreadLocal.withInitial(() -> new long[2][]);
++
++  /** a reused array of n latents (contents undefined) for the primary (0) or secondary (1) */
++  static long[] splitArray(int which, int n) {
++    long[][] arrays = SPLIT_ARRAYS.get();
++    long[] a = arrays[which];
++    if (a == null || a.length != n) {
++      a = new long[n];
++      arrays[which] = a;
++    }
++    return a;
++  }
++
+   static Split classicSplit(NumberType t, long[] nums) {
+-    long[] p = new long[nums.length];
++    long[] p = splitArray(0, nums.length);
+     for (int i = 0; i < nums.length; i++) {
+       p[i] = t.toLatentOrdered(nums[i]);
+     }
+@@ -443,8 +462,8 @@ final class Modes {
+     private static final double LCB_RATIO = 1.0;
+ 
+     static Split splitLatents(NumberType t, long[] nums, long base) {
+-      long[] mults = new long[nums.length];
+-      long[] adjs = new long[nums.length];
++      long[] mults = splitArray(0, nums.length);
++      long[] adjs = splitArray(1, nums.length);
+       for (int i = 0; i < nums.length; i++) {
+         long u = t.toLatentOrdered(nums[i]);
+         mults[i] = Latent.div(u, base);
+@@ -651,8 +670,8 @@ final class Modes {
+     static Split splitLatents(NumberType t, FloatType f, long[] nums, int k) {
+       Latent lt = t.latent;
+       long lowestMax = lt.sub(shl(lt, 1, k), 1);
+-      long[] primary = new long[nums.length];
+-      long[] secondary = new long[nums.length];
++      long[] primary = splitArray(0, nums.length);
++      long[] secondary = splitArray(1, nums.length);
+       for (int i = 0; i < nums.length; i++) {
+         long num = nums[i];
+         long u = t.toLatentOrdered(num);

@@ -1,0 +1,39 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java
+index f57b9a4..3eb3ee8 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/BitReader.java
+@@ -14,6 +14,9 @@ final class BitReader {
+   private final int end;
+   /** bit position relative to {@code start} */
+   long bitIdx;
++  /** the 64 bits at {@link #windowBit} (a byte boundary); none loaded at first */
++  private long window;
++  private long windowBit = -(1L << 62);
+ 
+   /** Reads {@code src[start, end)}; the caller has checked that range lies in {@code src}. */
+   BitReader(byte[] src, int start, int end) {
+@@ -41,12 +44,19 @@ final class BitReader {
+     if (n == 0) {
+       return 0;
+     }
+-    long byteIdx = at >>> 3;
+-    int off = (int) (at & 7);
+-    long v = u64At(byteIdx) >>> off;
+-    if (n > 64 - off - 0 && off > 0) {
+-      v |= u64At(byteIdx + 8) << (64 - off);
++    long rel = at - windowBit;
++    if (rel < 0 || rel > 64 - n) {
++      // refill at the value's byte: at least 57 bits from there
++      long byteIdx = at >>> 3;
++      window = u64At(byteIdx);
++      windowBit = byteIdx << 3;
++      rel = at & 7;
++      if (rel > 64 - n) {
++        long v = (window >>> rel) | (u64At(byteIdx + 8) << (64 - rel));
++        return n == 64 ? v : v & ((1L << n) - 1);
++      }
+     }
++    long v = window >>> rel;
+     return n == 64 ? v : v & ((1L << n) - 1);
+   }
+ 

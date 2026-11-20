@@ -1,0 +1,45 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..d0b1c61 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -140,22 +140,33 @@ final class ChunkCompressor {
+       int finalBaseI = (len / ChunkMeta.ANS_INTERLEAVING) * ChunkMeta.ANS_INTERLEAVING;
+       int finalJ = len % ChunkMeta.ANS_INTERLEAVING;
+       for (int j = finalJ - 1; j >= 0; j--) {
+-        encodeOne(d, rs, finalBaseI + j, j);
++        d.ansFinalStates[j] = encodeOne(d, rs, finalBaseI + j, d.ansFinalStates[j]);
+       }
++      // the four interleaved states (ANS_INTERLEAVING) live in locals for the batch's full
++      // groups, so the hot loop neither loads nor stores them through the array
++      int s0 = d.ansFinalStates[0];
++      int s1 = d.ansFinalStates[1];
++      int s2 = d.ansFinalStates[2];
++      int s3 = d.ansFinalStates[3];
+       for (int baseI = finalBaseI - ChunkMeta.ANS_INTERLEAVING; baseI >= 0; baseI -= ChunkMeta.ANS_INTERLEAVING) {
+-        for (int j = ChunkMeta.ANS_INTERLEAVING - 1; j >= 0; j--) {
+-          encodeOne(d, rs, baseI + j, j);
+-        }
++        s3 = encodeOne(d, rs, baseI + 3, s3);
++        s2 = encodeOne(d, rs, baseI + 2, s2);
++        s1 = encodeOne(d, rs, baseI + 1, s1);
++        s0 = encodeOne(d, rs, baseI, s0);
+       }
++      d.ansFinalStates[0] = s0;
++      d.ansFinalStates[1] = s1;
++      d.ansFinalStates[2] = s2;
++      d.ansFinalStates[3] = s3;
+     }
+ 
+-    private void encodeOne(Dissected d, int rs, int i, int j) {
+-      int state = d.ansFinalStates[j];
++    /** Encodes latent {@code i} of the batch from {@code state}; returns the new state. */
++    private int encodeOne(Dissected d, int rs, int i, int state) {
+       long r = encoder.encode(state, scratchSymbols[i]);
+       int bitlen = (int) (r >>> 32);
+       d.ansVals[rs + i] = state & ((1 << bitlen) - 1);
+       d.ansBits[rs + i] = bitlen;
+-      d.ansFinalStates[j] = (int) r;
++      return (int) r;
+     }
+ 
+     void writeDissectedBatch(Dissected d, int batchStart, BitWriter w) {

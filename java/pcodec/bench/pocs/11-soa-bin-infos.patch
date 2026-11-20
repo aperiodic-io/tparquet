@@ -1,0 +1,84 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..ad2b0d9 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -18,7 +18,11 @@ final class ChunkCompressor {
+     // CompressionTable
+     final int searchSizeLog;
+     final long[] searchLowers;
+-    final BinOptimization.BinInfo[] infos;
++    // the bins as parallel arrays rather than BinInfo objects, so the dissection loop reads
++    // primitives without a pointer chase per latent; the lower bounds are searchLowers[0, nBins)
++    final int nBins;
++    final int[] binSymbols;
++    final int[] binOffsetBits;
+     final Ans.Encoder encoder;
+     final double avgBitsPerLatent;
+     final boolean isTrivial;
+@@ -32,12 +36,20 @@ final class ChunkCompressor {
+       this.needsAns = bins.length != 1;
+       // the reference sorts the bins by lower bound; trainInfos gives them in that order already
+       // (BinOptimizationTest)
+-      this.infos = trained.infos.toArray(new BinOptimization.BinInfo[0]);
+-      this.searchSizeLog =
+-          infos.length <= 1 ? 0 : 1 + (31 - Integer.numberOfLeadingZeros(infos.length - 1));
+-      this.searchLowers = new long[Math.max(1 << searchSizeLog, infos.length)];
++      this.nBins = trained.infos.size();
++      this.binSymbols = new int[nBins];
++      this.binOffsetBits = new int[nBins];
++      this.searchSizeLog = nBins <= 1 ? 0 : 1 + (31 - Integer.numberOfLeadingZeros(nBins - 1));
++      this.searchLowers = new long[Math.max(1 << searchSizeLog, nBins)];
+       for (int i = 0; i < searchLowers.length; i++) {
+-        searchLowers[i] = i < infos.length ? infos[i].lower : lt.max();
++        if (i < nBins) {
++          BinOptimization.BinInfo info = trained.infos.get(i);
++          searchLowers[i] = info.lower;
++          binSymbols[i] = info.symbol;
++          binOffsetBits[i] = info.offsetBits;
++        } else {
++          searchLowers[i] = lt.max();
++        }
+       }
+       int[] weights = new int[bins.length];
+       for (int i = 0; i < bins.length; i++) {
+@@ -47,7 +59,7 @@ final class ChunkCompressor {
+       this.avgBitsPerLatent = avgBitsPerLatent(bins, trained.ansSizeLog);
+       this.isTrivial = bins.length == 0 || (bins.length == 1 && bins[0].offsetBits == 0);
+       this.latents = latents;
+-      long defaultLower = infos.length == 1 ? infos[0].lower : 0;
++      long defaultLower = nBins == 1 ? searchLowers[0] : 0;
+       java.util.Arrays.fill(scratchLowers, defaultLower);
+     }
+ 
+@@ -102,23 +114,23 @@ final class ChunkCompressor {
+             }
+           }
+         }
+-        if (infos.length < (1 << searchSizeLog)) {
++        if (nBins < (1 << searchSizeLog)) {
+           for (int i = 0; i < FULL_BATCH_N; i++) {
+-            searchIdxs[i] = Math.min(searchIdxs[i], infos.length - 1);
++            searchIdxs[i] = Math.min(searchIdxs[i], nBins - 1);
+           }
+         }
+         // dissect bins
+-        if (infos.length <= 1) {
+-          int obits = infos.length == 1 ? infos[0].offsetBits : 0;
++        if (nBins <= 1) {
++          int obits = nBins == 1 ? binOffsetBits[0] : 0;
+           for (int i = 0; i < batchN; i++) {
+             d.offsetBits[rs + i] = obits;
+           }
+         } else {
+           for (int i = 0; i < batchN; i++) {
+-            BinOptimization.BinInfo info = infos[searchIdxs[i]];
+-            scratchLowers[i] = info.lower;
+-            scratchSymbols[i] = info.symbol;
+-            d.offsetBits[rs + i] = info.offsetBits;
++            int idx = searchIdxs[i];
++            scratchLowers[i] = searchLowers[idx];
++            scratchSymbols[i] = binSymbols[idx];
++            d.offsetBits[rs + i] = binOffsetBits[idx];
+           }
+         }
+         // offsets

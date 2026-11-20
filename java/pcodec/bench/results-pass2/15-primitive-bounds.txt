@@ -1,0 +1,45 @@
+| case                     |  java enc |  rust enc |  ratio |  java dec |  rust dec |  ratio |   size |
+| f64 prices (auto)        |        63 |         - |      - |       242 |         - |      - |  0.046 |
+| f64 walk (auto)          |        67 |         - |      - |       462 |         - |      - |  0.709 |
+| f64 floatMult            |        89 |         - |      - |       306 |         - |      - |  0.223 |
+| f64 quant                |        59 |         - |      - |       299 |         - |      - |  0.307 |
+| f32 decimal              |        40 |         - |      - |       208 |         - |      - |  0.731 |
+| i64 timestamps           |       138 |         - |      - |       503 |         - |      - |  0.025 |
+| i64 uniform              |       156 |         - |      - |      1256 |         - |      - |  1.000 |
+| i64 mult (intMult)       |        91 |         - |      - |       309 |         - |      - |  0.260 |
+| i32 walk                 |        37 |         - |      - |       307 |         - |      - |  0.240 |
+| u32 periodic lookback    |        41 |         - |      - |       200 |         - |      - |  0.030 |
+| i32 quadratic conv1(2)   |        57 |         - |      - |       150 |         - |      - |  0.758 |
+| u16 dictish (dict)       |        22 |         - |      - |       129 |         - |      - |  0.174 |
+| i64 classic no-op        |       154 |         - |      - |       575 |         - |      - |  0.242 |
+| f64 sorted consec(2)     |        66 |         - |      - |       319 |         - |      - |  0.563 |
+| case                     |  java enc |  rust enc |  ratio |  java dec |  rust dec |  ratio |   size |
+| f64 prices (auto)        |        64 |         - |      - |       217 |         - |      - |  0.046 |
+| f64 walk (auto)          |        73 |         - |      - |       498 |         - |      - |  0.709 |
+| f64 floatMult            |        80 |         - |      - |       327 |         - |      - |  0.223 |
+| f64 quant                |        58 |         - |      - |       291 |         - |      - |  0.307 |
+| f32 decimal              |        34 |         - |      - |       261 |         - |      - |  0.731 |
+| i64 timestamps           |       137 |         - |      - |       498 |         - |      - |  0.025 |
+| i64 uniform              |       135 |         - |      - |       859 |         - |      - |  1.000 |
+| i64 mult (intMult)       |        91 |         - |      - |       326 |         - |      - |  0.260 |
+| i32 walk                 |        30 |         - |      - |       235 |         - |      - |  0.240 |
+| u32 periodic lookback    |        33 |         - |      - |       191 |         - |      - |  0.030 |
+| i32 quadratic conv1(2)   |        41 |         - |      - |        90 |         - |      - |  0.758 |
+| u16 dictish (dict)       |        26 |         - |      - |       126 |         - |      - |  0.174 |
+| i64 classic no-op        |       141 |         - |      - |       490 |         - |      - |  0.242 |
+| f64 sorted consec(2)     |        91 |         - |      - |       505 |         - |      - |  0.563 |
+| case                     |  java enc |  rust enc |  ratio |  java dec |  rust dec |  ratio |   size |
+| f64 prices (auto)        |        66 |         - |      - |       255 |         - |      - |  0.046 |
+| f64 walk (auto)          |        68 |         - |      - |       434 |         - |      - |  0.709 |
+| f64 floatMult            |        96 |         - |      - |       346 |         - |      - |  0.223 |
+| f64 quant                |        55 |         - |      - |       289 |         - |      - |  0.307 |
+| f32 decimal              |        44 |         - |      - |       283 |         - |      - |  0.731 |
+| i64 timestamps           |       128 |         - |      - |       485 |         - |      - |  0.025 |
+| i64 uniform              |       146 |         - |      - |      1110 |         - |      - |  1.000 |
+| i64 mult (intMult)       |        96 |         - |      - |       319 |         - |      - |  0.260 |
+| i32 walk                 |        32 |         - |      - |       284 |         - |      - |  0.240 |
+| u32 periodic lookback    |        40 |         - |      - |       206 |         - |      - |  0.030 |
+| i32 quadratic conv1(2)   |        54 |         - |      - |       127 |         - |      - |  0.758 |
+| u16 dictish (dict)       |        27 |         - |      - |       138 |         - |      - |  0.174 |
+| i64 classic no-op        |       145 |         - |      - |       573 |         - |      - |  0.242 |
+| f64 sorted consec(2)     |        87 |         - |      - |       510 |         - |      - |  0.563 |

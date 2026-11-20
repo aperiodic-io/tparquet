@@ -1,0 +1,38 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+index fd8bdd5..1f7eabf 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+@@ -40,6 +40,9 @@ final class Delta {
+   // ------------------------------------------------------------ consecutive
+ 
+   static long[] consecutiveEncode(Latent lt, int order, long[] v, int from, int to) {
++    if (lt.bits == 64) {
++      return consecutiveEncode64(order, v, from, to);
++    }
+     long[] moments = new long[order];
+     int start = from;
+     for (int k = 0; k < order; k++) {
+@@ -53,6 +56,23 @@ final class Delta {
+     return moments;
+   }
+ 
++  /** {@link #consecutiveEncode} for u64: a long's arithmetic wraps as u64's, no mask needed */
++  private static long[] consecutiveEncode64(int order, long[] v, int from, int to) {
++    long[] moments = new long[order];
++    int start = from;
++    for (int k = 0; k < order; k++) {
++      moments[k] = start < to ? v[start] : 0;
++      for (int i = to - 1; i > start; i--) {
++        v[i] -= v[i - 1];
++      }
++      start += Math.min(to - start, 1);
++    }
++    for (int i = start; i < to; i++) {
++      v[i] += Long.MIN_VALUE; // toggleCenter: + 2^63
++    }
++    return moments;
++  }
++
+   static void consecutiveDecode(Latent lt, long[] moments, long[] v, int from, int to) {
+     toggleCenter(lt, v, from, to);
+     for (int m = moments.length - 1; m >= 0; m--) {

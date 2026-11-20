@@ -1,0 +1,56 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java
+index 3ba2aff..8a4e996 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java
+@@ -47,6 +47,21 @@ final class BinOptimization {
+     return binMetaCost + (ansCost + offsetCost) * countF;
+   }
+ 
++  /**
++   * {@code log2Approx} of every count in [0, totalCount], when there are no more of them than
++   * (j, i) pairs to cost; null otherwise.
++   */
++  private static float[] log2Table(int totalCount, int nb) {
++    if ((long) totalCount >= (long) nb * (nb + 1) / 2) {
++      return null;
++    }
++    float[] table = new float[totalCount + 1];
++    for (int k = 0; k <= totalCount; k++) {
++      table[k] = log2Approx(RustMath.u64ToF32(k));
++    }
++    return table;
++  }
++
+   /** the inclusive bin index ranges [j, i] to merge */
+   static List<int[]> chooseOptimizedPartitioning(
+       Latent lt, List<Histogram.Bin> bins, int ansSizeLog) {
+@@ -70,6 +85,7 @@ final class BinOptimization {
+     float totalCountLog2 = log2Approx(RustMath.u64ToF32(c & 0xffffffffL));
+     int[] bestJs = new int[nb];
+     float binMetaCost = (float) binExactBitSize(lt, ansSizeLog);
++    float[] log2 = log2Table(totalCount, nb);
+     for (int i = 0; i < nb; i++) {
+       float bestCost = Float.MAX_VALUE;
+       int bestJ = -1;
+@@ -77,9 +93,18 @@ final class BinOptimization {
+       int cCountI = cCounts[i + 1];
+       for (int j = i; j >= 0; j--) {
+         long lower = lowers[j];
+-        float cost =
+-            bestCosts[j]
+-                + binCost(lt, binMetaCost, lower, upper, cCountI - cCounts[j], totalCountLog2);
++        int count = cCountI - cCounts[j];
++        float binCost;
++        if (log2 == null) {
++          binCost = binCost(lt, binMetaCost, lower, upper, count, totalCountLog2);
++        } else {
++          // binCost, with log2Approx(count) from the table
++          float countF = RustMath.u64ToF32(count & 0xffffffffL);
++          float ansCost = totalCountLog2 - log2[count];
++          float offsetCost = (float) lt.bitsToEncode(lt.sub(upper, lower));
++          binCost = binMetaCost + (ansCost + offsetCost) * countF;
++        }
++        float cost = bestCosts[j] + binCost;
+         if (cost < bestCost) {
+           bestCost = cost;
+           bestJ = j;

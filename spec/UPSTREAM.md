@@ -141,7 +141,9 @@ All values round-trip bit for bit. Where it is weaker:
   slower on small files.
 - *Data it does not help*: strings and booleans; order books stored as lists come out at
   1.07× of ZSTD(9).
-- *Implementation*: every number above comes from the Rust implementation.
+- *Implementation*: every number above comes from the Rust implementation. A pure Java
+  implementation exists ([`java/pcodec`](../java/pcodec), item 1). Its preliminary speeds are
+  a third to a half of the Rust encoder's and a fifth to two fifths of its decoder's.
 
 This is not yet the evidence the community asked for. In 2025 the objection was that the
 benchmarks were "rather niche" and that new encodings "should be gated with a large enough
@@ -176,8 +178,8 @@ notes of [19 March](https://www.mail-archive.com/dev@parquet.apache.org/msg26303
 
 | Concern | Raised | This proposal |
 |---|---|---|
-| Rust toolchain and FFI; "my organization does not currently allow Rust code in production" | 2024 | Not answered by tparquet today: every implementation here calls one Rust core. Answered by a pure Java implementation (item 1) |
-| JNI in parquet-java is "a non-starter"; "a pure java implementation of PCO is always desirable"; a Java fallback is needed when native code does not load | 2024 | `CONTRIBUTING.md` makes it a rule for compression. Item 1 |
+| Rust toolchain and FFI; "my organization does not currently allow Rust code in production" | 2024 | Every engine integration here still calls one Rust core. [`java/pcodec`](../java/pcodec) is a pure Java implementation, without native code (item 1) |
+| JNI in parquet-java is "a non-starter"; "a pure java implementation of PCO is always desirable"; a Java fallback is needed when native code does not load | 2024 | `CONTRIBUTING.md` makes it a rule for compression. [`java/pcodec`](../java/pcodec) writes and reads exactly what the Rust reference does; parquet-java does not use it yet (item 1) |
 | Only Java? "Java is not the only implementation of Parquet" | 2024 | Two implementations, parquet-java first, as `CONTRIBUTING.md` asks; the arrow-rs fork here is the second; a C++ implementation follows the Java one |
 | It should be a specification, not a library | 2024 | A codec with an external, pinned format spec, as for ZSTD and LZ4_RAW (Rationale, Spec) |
 | The pcodec spec is incomplete: no overview, tANS and latent variables not defined, "data page" means something else | 2024, issue #149 (partly addressed, some items left) | Item 2: the remaining items closed, and the Java implementation written from the spec alone as the test of completeness |
@@ -206,6 +208,14 @@ notes of [19 March](https://www.mail-archive.com/dev@parquet.apache.org/msg26303
    `CONTRIBUTING.md`, it answers the toolchain and JNI objections, and it shows the spec is
    complete. A C++ implementation without Rust should follow, for Arrow C++ and the
    independent C++ readers (Velox, DuckDB).
+   *Status:* [`java/pcodec`](../java/pcodec) is a pure Java implementation of pcodec 1.0.4 and
+   of the payload. It has no runtime dependencies, targets Java 11, passes every vector in
+   `testdata/` and reads every page of `testdata/files`. Its output is verified to equal the
+   Rust reference's byte for byte ([`VERIFICATION.md`](../java/pcodec/VERIFICATION.md)). It
+   answers the toolchain and JNI objections. It is a port of the reference's source, not
+   written from the specification alone, so it does not show the spec complete (item 2 still
+   stands). Its speeds are only measured roughly (its README), and the parquet-java fork does
+   not use it yet.
 2. **A complete, pinned pcodec format document.** Close what pcodec issue #149 left open (an
    overview, definitions of the tANS terms and latent variables, the "data page" terminology)
    upstream in pcodec, and cite one version of the format with a compatibility promise.

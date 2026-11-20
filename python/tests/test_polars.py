@@ -559,3 +559,11 @@ def test_a_dotted_name_is_not_a_nested_leaf(tmp_path: pathlib.Path, monkeypatch:
         out, groups = kept(ppl.scan_parquet(p), monkeypatch, pl.col("a.b") < 20)
         assert out["a.b"].to_list() == list(range(20))
         assert groups == [0, 1]
+
+
+def test_write_parquet_passes_the_policy() -> None:
+    # a column the auto policy gives to PCODEC, so that only the policy passed changes the codec
+    df = pl.DataFrame({"z": [1_700_000_000_000 + 1000 * i for i in range(2000)]})
+    assert ppl.write_parquet(df, io.BytesIO()) == {"z": "PCODEC"}
+    assert ppl.write_parquet(df, io.BytesIO(), policy="auto") == {"z": "PCODEC"}
+    assert ppl.write_parquet(df, io.BytesIO(), policy="base") == {"z": "ZSTD"}

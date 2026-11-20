@@ -1,0 +1,44 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
+index ace201f..09c5e10 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkDecompressor.java
+@@ -218,6 +218,14 @@ final class ChunkDecompressor {
+     Latent lt = type.latent;
+     switch (meta.mode.kind) {
+       case CLASSIC:
++        if (type.isFloat()) {
++          int topBit = lt.bits - 1;
++          long mask = lt.mask;
++          for (int i = 0; i < batchN; i++) {
++            dst[at + i] = NumberType.floatFromLatentOrdered(primary[i], topBit, mask);
++          }
++          break;
++        }
+         for (int i = 0; i < batchN; i++) {
+           dst[at + i] = type.fromLatentOrdered(primary[i]);
+         }
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/NumberType.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/NumberType.java
+index 9f74e8d..c47adc5 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/NumberType.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/NumberType.java
+@@ -81,10 +81,16 @@ public enum NumberType {
+       case SIGNED:
+         return l ^ latent.mid;
+       default:
+-        {
+-          long flipAll = (latent.mid & l) != 0 ? 0 : latent.mask;
+-          return l ^ (flipAll | latent.mid);
+-        }
++        return floatFromLatentOrdered(l, latent.bits - 1, latent.mask);
+     }
+   }
++
++  /**
++   * The float case of {@link #fromLatentOrdered} without a branch: {@code flipAll} is the mask
++   * when the latent's top bit ({@code topBit}) is clear, else 0.
++   */
++  static long floatFromLatentOrdered(long l, int topBit, long mask) {
++    long flipAll = (((l >>> topBit) & 1) - 1) & mask;
++    return l ^ (flipAll | (1L << topBit));
++  }
+ }

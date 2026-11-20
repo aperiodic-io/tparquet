@@ -1,0 +1,164 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/LongIndexMap.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/LongIndexMap.java
+new file mode 100644
+index 0000000..3f74bf3
+--- /dev/null
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/LongIndexMap.java
+@@ -0,0 +1,90 @@
++package io.aperiodic.pcodec;
++
++import java.util.Arrays;
++
++/**
++ * An open-addressing set of {@code long} keys that numbers them in order of first insertion:
++ * key {@code i} is the {@code i}-th distinct key added. Callers keep their values in arrays
++ * indexed by that number, so iterating {@code 0 .. size()} is a {@code LinkedHashMap}'s order.
++ */
++final class LongIndexMap {
++  private static final long PHI = 0x9E3779B97F4A7C15L;
++
++  private long[] keys;
++  /** 0 for an empty slot, else the key's index + 1 */
++  private int[] slots;
++  private int shift;
++  private int size;
++
++  LongIndexMap(int expected) {
++    int cap = 16;
++    while (cap < 2L * expected && cap < (1 << 30)) {
++      cap <<= 1;
++    }
++    slots = new int[cap];
++    shift = 64 - Integer.numberOfTrailingZeros(cap);
++    keys = new long[Math.max(cap >>> 1, 1)];
++  }
++
++  int size() {
++    return size;
++  }
++
++  long key(int index) {
++    return keys[index];
++  }
++
++  /** the key's index, or -1 */
++  int get(long key) {
++    int mask = slots.length - 1;
++    for (int s = (int) ((key * PHI) >>> shift); ; s = (s + 1) & mask) {
++      int v = slots[s];
++      if (v == 0) {
++        return -1;
++      }
++      if (keys[v - 1] == key) {
++        return v - 1;
++      }
++    }
++  }
++
++  /** the key's index, adding it if absent */
++  int add(long key) {
++    int mask = slots.length - 1;
++    int s = (int) ((key * PHI) >>> shift);
++    while (true) {
++      int v = slots[s];
++      if (v == 0) {
++        break;
++      }
++      if (keys[v - 1] == key) {
++        return v - 1;
++      }
++      s = (s + 1) & mask;
++    }
++    int index = size++;
++    if (index == keys.length) {
++      keys = Arrays.copyOf(keys, keys.length * 2);
++    }
++    keys[index] = key;
++    slots[s] = index + 1;
++    if (2L * size > slots.length) {
++      rehash();
++    }
++    return index;
++  }
++
++  private void rehash() {
++    int cap = slots.length * 2;
++    slots = new int[cap];
++    shift = 64 - Integer.numberOfTrailingZeros(cap);
++    int mask = cap - 1;
++    for (int i = 0; i < size; i++) {
++      int s = (int) ((keys[i] * PHI) >>> shift);
++      while (slots[s] != 0) {
++        s = (s + 1) & mask;
++      }
++      slots[s] = i + 1;
++    }
++  }
++}
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
+index a4ed68b..aa68c0f 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Modes.java
+@@ -254,14 +254,15 @@ final class Modes {
+    * first appearance (see VERIFICATION.md on summation order).
+    */
+   static double estBitsSavedPerNum(long[] sample, PrimaryFn primaryFn, double bitsSavedEach) {
+-    Map<Long, double[]> countsAndSavings = new LinkedHashMap<>();
++    LongIndexMap primaries = new LongIndexMap(sample.length);
++    int[] counts = new int[sample.length];
++    double[] savings = new double[sample.length];
+     for (long x : sample) {
+-      long p = primaryFn.primary(x);
+-      double[] e = countsAndSavings.computeIfAbsent(p, key -> new double[] {0, 0.0});
+-      e[0] += 1;
+-      e[1] += bitsSavedEach;
++      int e = primaries.add(primaryFn.primary(x));
++      counts[e] += 1;
++      savings[e] += bitsSavedEach;
+     }
+-    return sumInfrequent(sample.length, countsAndSavings);
++    return sumInfrequent(sample.length, primaries.size(), counts, savings);
+   }
+ 
+   interface PrimaryAndSavings {
+@@ -270,27 +271,30 @@ final class Modes {
+   }
+ 
+   static double estBitsSavedPerNum(long[] sample, PrimaryAndSavings f) {
+-    Map<Long, double[]> countsAndSavings = new LinkedHashMap<>();
++    LongIndexMap primaries = new LongIndexMap(sample.length);
++    int[] counts = new int[sample.length];
++    double[] savings = new double[sample.length];
+     long[] out = new long[1];
+     for (long x : sample) {
+       double saved = f.apply(x, out);
+-      double[] e = countsAndSavings.computeIfAbsent(out[0], key -> new double[] {0, 0.0});
+-      e[0] += 1;
+-      e[1] += saved;
++      int e = primaries.add(out[0]);
++      counts[e] += 1;
++      savings[e] += saved;
+     }
+-    return sumInfrequent(sample.length, countsAndSavings);
++    return sumInfrequent(sample.length, primaries.size(), counts, savings);
+   }
+ 
+-  private static double sumInfrequent(int sampleLen, Map<Long, double[]> countsAndSavings) {
++  /** sums the savings of the primaries seen at most the cutoff times, in order of first appearance */
++  private static double sumInfrequent(int sampleLen, int nPrimaries, int[] counts, double[] savings) {
+     long cutoff = Math.max(1, RustMath.f64ToUnsigned(sampleLen / CLASSIC_MEMORIZABLE_BINS, 64));
+     double s = -0.0;
+-    double[] terms = Margins.on() ? new double[countsAndSavings.size()] : null;
++    double[] terms = Margins.on() ? new double[nPrimaries] : null;
+     int nTerms = 0;
+-    for (double[] e : countsAndSavings.values()) {
+-      if ((long) e[0] <= cutoff) {
+-        s += e[1];
++    for (int e = 0; e < nPrimaries; e++) {
++      if (counts[e] <= cutoff) {
++        s += savings[e];
+         if (terms != null) {
+-          terms[nTerms++] = e[1];
++          terms[nTerms++] = savings[e];
+         }
+       }
+     }

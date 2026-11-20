@@ -1,0 +1,27 @@
+# The reference oracle built against pco 1.0.4 with Dict mode's dictionary recorded
+# (prepare.sh): the same main.rs as ../oracle, with its `trace` op. Its own workspace.
+[workspace]
+
+[package]
+name = "pcodec-oracle-traced"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "pcodec-oracle-traced"
+path = "../oracle/src/main.rs"
+
+[features]
+default = ["trace"]
+trace = []
+
+[dependencies]
+pco = "=1.0.4"
+half = "2"
+tparquet-core = { path = "../../../rust/core" }
+
+[patch.crates-io]
+pco = { path = "target/pco-1.0.4-traced" }

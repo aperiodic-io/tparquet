@@ -1,0 +1,180 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java
+index 3ba2aff..7be37ac 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/BinOptimization.java
+@@ -1,6 +1,7 @@
+ package io.aperiodic.pcodec;
+ 
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.List;
+ 
+ /** {@code pco::bin_optimization}: merges histogram bins to minimize the estimated bit size. */
+@@ -182,13 +183,58 @@ final class BinOptimization {
+     }
+   }
+ 
++  /**
++   * Histograms already computed while compressing one chunk, by the latents they were computed
++   * from: the candidates of one chunk can bin the very same latents (a chunk of at most 200 numbers
++   * is its own delta sample, so the chosen delta's sample candidate is the final one), and the
++   * histogram is the costliest part of training. The bins are a function of the latents in their
++   * order, so an entry only serves an equal array of the same type and bin count.
++   */
++  static final class HistogramCache {
++    private static final class Entry {
++      final Latent lt;
++      final int nBinsLog;
++      final long[] latents;
++      final List<Histogram.Bin> bins;
++
++      Entry(Latent lt, int nBinsLog, long[] latents, List<Histogram.Bin> bins) {
++        this.lt = lt;
++        this.nBinsLog = nBinsLog;
++        this.latents = latents;
++        this.bins = bins;
++      }
++    }
++
++    private final List<Entry> entries = new ArrayList<>();
++
++    /** {@link Histogram#histogram}, which reorders {@code latents} unless it is a hit */
++    List<Histogram.Bin> histogram(long[] latents, Latent lt, int nBinsLog) {
++      for (Entry e : entries) {
++        if (e.lt == lt && e.nBinsLog == nBinsLog && Arrays.equals(e.latents, latents)) {
++          return e.bins;
++        }
++      }
++      // the key is taken before the histogram reorders the latents
++      long[] key = latents.clone();
++      List<Histogram.Bin> bins = Histogram.histogram(latents, lt, nBinsLog);
++      entries.add(new Entry(lt, nBinsLog, key, bins));
++      return bins;
++    }
++  }
++
+   /** {@code train_infos}; {@code latents} is scratch (it gets reordered). */
+   static Trained trainInfos(Latent lt, long[] latents, int unoptimizedBinsLog) {
++    return trainInfos(lt, latents, unoptimizedBinsLog, new HistogramCache());
++  }
++
++  /** {@link #trainInfos} with the histogram taken from {@code cache} when it has it */
++  static Trained trainInfos(
++      Latent lt, long[] latents, int unoptimizedBinsLog, HistogramCache cache) {
+     if (latents.length == 0) {
+       return new Trained(new ArrayList<>(), 0, new int[0]);
+     }
+     int nLatents = latents.length;
+-    List<Histogram.Bin> unoptimized = Histogram.histogram(latents, lt, unoptimizedBinsLog);
++    List<Histogram.Bin> unoptimized = cache.histogram(latents, lt, unoptimizedBinsLog);
+     int nLogCeil = nLatents <= 1 ? 0 : (31 - Integer.numberOfLeadingZeros(nLatents - 1)) + 1;
+     int estimatedAnsSizeLog = Math.min(Math.min(unoptimizedBinsLog + 2, 12), nLogCeil);
+     List<BinInfo> optimized = optimizeBins(lt, unoptimized, estimatedAnsSizeLog);
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+index f6cfbf6..050f090 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/ChunkCompressor.java
+@@ -277,7 +277,8 @@ final class ChunkCompressor {
+       PagingSpec paging,
+       Mode mode,
+       DeltaEncoding delta,
+-      int unoptimizedBinsLog) {
++      int unoptimizedBinsLog,
++      BinOptimization.HistogramCache cache) {
+     long[] nPerPage = paging.nPerPage(primary.length);
+     Latent[] types = {Latent.U32, mode.primaryLatentType(numberLatent), numberLatent};
+     Encoded enc =
+@@ -304,7 +305,7 @@ final class ChunkCompressor {
+         System.arraycopy(latents, p.start[key], contiguous, at, len);
+         at += len;
+       }
+-      BinOptimization.Trained trained = BinOptimization.trainInfos(types[key], contiguous, ubl);
++      BinOptimization.Trained trained = BinOptimization.trainInfos(types[key], contiguous, ubl, cache);
+       ChunkMeta.Bin[] bins = new ChunkMeta.Bin[trained.infos.size()];
+       for (int i = 0; i < bins.length; i++) {
+         BinOptimization.BinInfo info = trained.infos.get(i);
+@@ -319,7 +320,11 @@ final class ChunkCompressor {
+   }
+ 
+   private static float calculateCompressedSampleSize(
+-      Latent lt, long[] sample, int unoptimizedBinsLog, DeltaEncoding delta) {
++      Latent lt,
++      long[] sample,
++      int unoptimizedBinsLog,
++      DeltaEncoding delta,
++      BinOptimization.HistogramCache cache) {
+     Candidate c =
+         newCandidate(
+             lt,
+@@ -328,7 +333,8 @@ final class ChunkCompressor {
+             PagingSpec.exact(sample.length),
+             Mode.CLASSIC,
+             delta,
+-            unoptimizedBinsLog);
++            unoptimizedBinsLog,
++            cache);
+     long size = c.cc.meta.maxSize() + c.cc.pageSizeHintInner(0);
+     return RustMath.u64ToF32(size);
+   }
+@@ -356,18 +362,19 @@ final class ChunkCompressor {
+   }
+ 
+   private static DeltaEncoding chooseAutoDeltaEncoding(
+-      Latent lt, long[] primary, int unoptimizedBinsLog) {
++      Latent lt, long[] primary, int unoptimizedBinsLog, BinOptimization.HistogramCache cache) {
+     long[] sample = chooseDeltaSample(primary);
+     if (sample == null) {
+       return DeltaEncoding.NO_OP;
+     }
+     int sampleN = sample.length;
+     DeltaEncoding best = DeltaEncoding.NO_OP;
+-    float bestCost = calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, DeltaEncoding.NO_OP);
++    float bestCost = calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, DeltaEncoding.NO_OP, cache);
+     float lookbackPenalty = LOOKBACK_REQUIRED_BYTE_SAVINGS_PER_N * RustMath.u64ToF32(sampleN);
+     if (bestCost > lookbackPenalty) {
+       float cost =
+-          calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, Delta.newLookback(sampleN))
++          calculateCompressedSampleSize(
++                  lt, sample, unoptimizedBinsLog, Delta.newLookback(sampleN), cache)
+               + lookbackPenalty;
+       if (cost < bestCost) {
+         best = Delta.newLookback(primary.length);
+@@ -376,7 +383,7 @@ final class ChunkCompressor {
+     }
+     for (int order = 1; order <= DeltaEncoding.MAX_CONSECUTIVE_ORDER; order++) {
+       DeltaEncoding enc = DeltaEncoding.consecutive(order, false);
+-      float cost = calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, enc);
++      float cost = calculateCompressedSampleSize(lt, sample, unoptimizedBinsLog, enc, cache);
+       if (cost < bestCost) {
+         best = enc;
+         bestCost = cost;
+@@ -398,11 +405,11 @@ final class ChunkCompressor {
+   }
+ 
+   private static DeltaEncoding chooseDeltaEncoding(
+-      Latent lt, long[] primary, ChunkConfig config, int ubl) {
++      Latent lt, long[] primary, ChunkConfig config, int ubl, BinOptimization.HistogramCache cache) {
+     DeltaSpec spec = config.deltaSpec;
+     switch (spec.kind) {
+       case AUTO:
+-        return chooseAutoDeltaEncoding(lt, primary, ubl);
++        return chooseAutoDeltaEncoding(lt, primary, ubl, cache);
+       case NO_OP:
+         return DeltaEncoding.NO_OP;
+       case TRY_CONSECUTIVE:
+@@ -492,9 +499,13 @@ final class ChunkCompressor {
+     }
+     Modes.Split split = bid.split.split(nums);
+     int ubl = chooseUnoptimizedBinsLog(config.compressionLevel, n);
+-    DeltaEncoding delta = chooseDeltaEncoding(bid.mode.primaryLatentType(lt), split.primary, config, ubl);
++    // shared by every candidate of this chunk
++    BinOptimization.HistogramCache cache = new BinOptimization.HistogramCache();
++    DeltaEncoding delta =
++        chooseDeltaEncoding(bid.mode.primaryLatentType(lt), split.primary, config, ubl, cache);
+     Candidate c =
+-        newCandidate(lt, split.primary, split.secondary, config.pagingSpec, bid.mode, delta, ubl);
++        newCandidate(
++            lt, split.primary, split.secondary, config.pagingSpec, bid.mode, delta, ubl, cache);
+     if (c.cc.shouldFallback(lt, n, c.binCounts)) {
+       return fallback(t, nums, config);
+     }

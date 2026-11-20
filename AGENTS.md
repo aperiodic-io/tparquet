@@ -18,6 +18,7 @@
 | `duckdb/` | DuckDB extension: DuckDB's own parquet extension with PCODEC, a patch over DuckDB 1.5.6 and 2.0.0 (`duckdb/FORK.md`) |
 | `polars-tparquet/` | Polars plugin package: `scan_tparquet`, `read_tparquet`, `tparquet` namespaces |
 | `java/` | Maven: JNI binding, fork of parquet-java 1.17.0 (`java/parquet-java/FORK.md`), `tparquet` library, Spark data source |
+| `java/pcodec` | pure Java pcodec 1.0.4 and the payload, byte for byte the Rust reference's (`java/pcodec/VERIFICATION.md`); its own Maven project and Rust oracle |
 | `datafusion/` | DataFusion 55.2 connector, its own Cargo workspace on a fork of parquet 59.3.2 (`datafusion/parquet/FORK.md`) |
 | `trino/` | Trino 484: fork of trino-parquet (`trino/trino-parquet/FORK.md`), plugin install script; uses `java/parquet-java-1.18` |
 | `cpp/` | C++ library and the Arrow C++ 26.0.1 fork, a patch over the release (`cpp/arrow/FORK.md`) |
@@ -31,7 +32,7 @@
 - **Every implementation passes the conformance vectors in `testdata/`.** A change to the payload
   format changes `spec/FORMAT.md` and the vectors in the same commit.
 - **Mutation testing.** Rust: `cargo mutants` (config in `.cargo/mutants.toml`); Go: `gremlins`;
-  Python: `mutmut`; Java: PIT (`make -C java mutants`); C++: `cpp/mutation` (scripted mutants of
+  Python: `mutmut`; Java: PIT (`make -C java mutants`, `make -C java/pcodec mutants`); C++: `cpp/mutation` (scripted mutants of
   the Arrow fork) and `duckdb/mutation` (of the DuckDB fork, `make -C duckdb mutation`). A
   surviving mutant is a missing test or dead code: add the test or remove the code. Any
   exclusion carries a comment that says why.

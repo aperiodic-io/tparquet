@@ -1,0 +1,150 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java
+index 383ae37..0a7e6ea 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Histogram.java
+@@ -20,17 +20,6 @@ final class Histogram {
+     }
+   }
+ 
+-  /** a bound: tight (the exact extreme) or loose (only a bound) */
+-  private static final class Bound {
+-    final boolean tight;
+-    final long x;
+-
+-    Bound(boolean tight, long x) {
+-      this.tight = tight;
+-      this.x = x;
+-    }
+-  }
+-
+   private final Latent lt;
+   private final long n;
+   private final long nBins;
+@@ -57,7 +46,7 @@ final class Histogram {
+   /** with a given bad pivot limit (the reference's is 1 + log2(n + 1); tests force smaller) */
+   static List<Bin> histogram(long[] latents, Latent lt, int nBinsLog, int badPivotLimit) {
+     Histogram h = new Histogram(lt, latents.length, nBinsLog);
+-    h.recurse(latents, 0, latents.length, new Bound(false, 0), new Bound(false, lt.max()), badPivotLimit);
++    h.recurse(latents, 0, latents.length, false, 0, false, lt.max(), badPivotLimit);
+     return h.dst;
+   }
+ 
+@@ -103,16 +92,21 @@ final class Histogram {
+     return m;
+   }
+ 
+-  private void applyIncomplete(long[] v, int from, int to, Bound lower, Bound upper) {
++  /**
++   * The bounds are passed as primitives, not objects, to allocate nothing per call: each is tight
++   * (the exact extreme of the range) or loose (only a bound).
++   */
++  private void applyIncomplete(
++      long[] v, int from, int to, boolean lowerTight, long lower, boolean upperTight, long upper) {
+     if (from == to) {
+       return;
+     }
+     if (hasIncomplete) {
+-      incUpper = upper.tight ? upper.x : sliceMax(v, from, to);
++      incUpper = upperTight ? upper : sliceMax(v, from, to);
+       incCount += to - from;
+     } else {
+-      long lb = lower.tight ? lower.x : sliceMin(v, from, to);
+-      long ub = upper.tight ? upper.x : sliceMax(v, from, to);
++      long lb = lowerTight ? lower : sliceMin(v, from, to);
++      long ub = upperTight ? upper : sliceMax(v, from, to);
+       hasIncomplete = true;
+       incCount = to - from;
+       incLower = lb;
+@@ -151,8 +145,8 @@ final class Histogram {
+         binIdx = spare;
+       }
+     }
+-    Bound c = new Bound(true, v[from]);
+-    applyIncomplete(v, from, to, c, c);
++    long c = v[from];
++    applyIncomplete(v, from, to, true, c, true, c);
+     if (end >= cCount(binIdx)) {
+       completeBin(binIdx);
+     }
+@@ -165,7 +159,7 @@ final class Histogram {
+       long targetI = targetCCount - nApplied;
+       int len = to - from;
+       if (targetI >= len) {
+-        applyIncomplete(v, from, to, new Bound(true, v[from]), new Bound(true, v[to - 1]));
++        applyIncomplete(v, from, to, true, v[from], true, v[to - 1]);
+         if (targetI == len) {
+           completeBin(targetBinIdx);
+         }
+@@ -181,14 +175,15 @@ final class Histogram {
+         r++;
+       }
+       if (l > 0) {
+-        applyIncomplete(v, from, from + l, new Bound(true, v[from]), new Bound(true, v[from + l - 1]));
++        applyIncomplete(v, from, from + l, true, v[from], true, v[from + l - 1]);
+       }
+       applyConstantRun(v, from + l, from + r);
+       from = from + r;
+     }
+   }
+ 
+-  private void recurse(long[] v, int from, int to, Bound lb, Bound ub, int badPivotLimit) {
++  private void recurse(
++      long[] v, int from, int to, boolean lbTight, long lb, boolean ubTight, long ub, int badPivotLimit) {
+     if (from == to) {
+       return;
+     }
+@@ -196,29 +191,35 @@ final class Histogram {
+     long targetCCount = cCount(targetBinIdx);
+     long end = nApplied + (to - from);
+     if (end <= targetCCount) {
+-      applyIncomplete(v, from, to, lb, ub);
++      applyIncomplete(v, from, to, lbTight, lb, ubTight, ub);
+       if (end == targetCCount) {
+         completeBin(targetBinIdx);
+       }
+       return;
+     }
+-    long looseLb = lb.x;
+-    if (looseLb == ub.x || to - from == 1) {
++    long looseLb = lb;
++    if (looseLb == ub || to - from == 1) {
+       applyConstantRun(v, from, to);
+       return;
+     }
+     long tentative = SortUtils.choosePivot(v, from, to);
+     long pivot;
+-    Bound lhsUb;
+-    Bound rhsLb;
++    boolean lhsUbTight;
++    long lhsUb;
++    boolean rhsLbTight;
++    long rhsLb;
+     if (Latent.lt(looseLb, tentative)) {
+       pivot = tentative;
+-      lhsUb = new Bound(false, lt.sub(tentative, 1));
+-      rhsLb = new Bound(true, tentative);
++      lhsUbTight = false;
++      lhsUb = lt.sub(tentative, 1);
++      rhsLbTight = true;
++      rhsLb = tentative;
+     } else {
+       pivot = lt.add(tentative, 1);
+-      lhsUb = new Bound(true, tentative);
+-      rhsLb = new Bound(false, pivot);
++      lhsUbTight = true;
++      lhsUb = tentative;
++      rhsLbTight = false;
++      rhsLb = pivot;
+     }
+     long pr = SortUtils.partition(v, from, to, pivot);
+     int lhsCount = (int) pr;
+@@ -235,7 +236,7 @@ final class Histogram {
+       SortUtils.breakPatterns(v, from, mid);
+       SortUtils.breakPatterns(v, mid, to);
+     }
+-    recurse(v, from, mid, lb, lhsUb, badPivotLimit);
+-    recurse(v, mid, to, rhsLb, ub, badPivotLimit);
++    recurse(v, from, mid, lbTight, lb, lhsUbTight, lhsUb, badPivotLimit);
++    recurse(v, mid, to, rhsLbTight, rhsLb, ubTight, ub, badPivotLimit);
+   }
+ }

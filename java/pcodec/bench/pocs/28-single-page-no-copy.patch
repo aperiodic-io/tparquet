@@ -1,0 +1,14 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java
+index f90118e..6cfa23e 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Pco.java
+@@ -36,7 +36,8 @@ public final class Pco {
+     int start = 0;
+     for (long pageNL : nPerPage) {
+       int pageN = (int) pageNL;
+-      long[] chunk = Arrays.copyOfRange(nums, start, start + pageN);
++      // ChunkCompressor.create does not write to the numbers: one page needs no copy
++      long[] chunk = pageN == nums.length ? nums : Arrays.copyOfRange(nums, start, start + pageN);
+       ChunkCompressor cc =
+           ChunkCompressor.create(type, chunk, config.withPagingSpec(PagingSpec.exact(pageN)));
+       w.writeAlignedBytes(new byte[] {(byte) type.typeByte});

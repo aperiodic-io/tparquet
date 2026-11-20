@@ -1,0 +1,15 @@
+diff --git a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+index fd8bdd5..06bc211 100644
+--- a/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
++++ b/java/pcodec/src/main/java/io/aperiodic/pcodec/Delta.java
+@@ -97,7 +97,9 @@ final class Delta {
+     java.util.Arrays.fill(lookbackCounts, 1);
+     java.util.Arrays.fill(lookbackGoodnesses, 1);
+     long[] lookbacks = new long[len - stateN];
+-    long[] idxHashTable = new long[COARSENESSES.length * hashTableN];
++    // the last index of each hash bucket; an index of the chunk fits an int (at most 2^24 numbers
++    // per chunk), and an int[] halves the table allocated and zeroed per page (up to 2^17 entries)
++    int[] idxHashTable = new int[COARSENESSES.length * hashTableN];
+     long[] proposed = new long[PROPOSED_LOOKBACKS];
+     for (int i = 0; i < PROPOSED_LOOKBACKS; i++) {
+       proposed[i] = Math.min(i + 1, stateN);
