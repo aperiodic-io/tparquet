@@ -57,7 +57,7 @@ approval before anything is uploaded.
 4. Merge the version change to `main`.
 5. For a release that changes the build (and before the first one), run the workflow by hand:
    Actions, release, Run workflow, on `main`. It builds and checks everything, every wheel on its
-   own platform included, and publishes nothing.
+   own platform included, and publishes nothing (unless you tick *publish-crates*).
 6. Tag the commit on `main` and push the tag:
 
    ```bash
@@ -74,6 +74,15 @@ approval before anything is uploaded.
 A version that crates.io or PyPI already has is skipped, so a release that failed half-way can
 be run again (Actions, the failed run, Re-run failed jobs). A published version can be yanked
 (`cargo yank`, PyPI's project settings) but never replaced: fix forward with a new version.
+
+## A crate without a tag
+
+A crate whose version is not the packages' (`tparquet-parquet` 59.3.2, or a new version of a
+fork) is published without a release: Actions, release, Run workflow, on `main`, with
+*publish-crates* ticked. After the checks and the build, the `crates-io` job (in the `release`
+environment, so it waits for its approval) publishes every crate whose version crates.io does
+not have, and nothing to PyPI. Only run it when `main`'s packages hold no unreleased version bump,
+since that would go to crates.io too, without its tag.
 
 ## After the first release
 

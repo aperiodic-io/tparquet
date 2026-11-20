@@ -15,6 +15,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish-crates:
+        description: "Also publish the crates.io crates crates.io lacks (no PyPI): for a crate outside the tagged versions, such as tparquet-parquet 59.3.2"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,7 +110,8 @@ jobs:
           if-no-files-found: error
 
   crates-io:
-    if: github.ref_type == 'tag'
+    # a tag, or a run by hand that asks for it (publish-crates.sh skips what crates.io has)
+    if: github.ref_type == 'tag' || inputs.publish-crates
     needs: [check, wheels, sdist, polars]
     runs-on: ubuntu-latest
     environment: release
